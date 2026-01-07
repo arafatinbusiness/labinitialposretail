@@ -1,0 +1,129 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ========== SIMPLE RULES FOR ALL AUTHENTICATED USERS ==========
+    // All authenticated users (cashiers, managers, salesmen, admins) can:
+    // - Read everything
+    // - Create everything
+    // - Update everything
+    // Only store owners (admins) can delete sensitive data
+    
+    // Check if user is authenticated
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    // Check if user is store owner (admin) - store document ID matches user UID
+    function isStoreOwner(storeId) {
+      return isSignedIn() && request.auth.uid == storeId;
+    }
+    
+    // ========== STORE DOCUMENT ==========
+    match /stores/{storeId} {
+      // All authenticated users can read stores
+      allow read: if isSignedIn();
+      // Only store owners can write store document
+      allow write: if isStoreOwner(storeId);
+      allow list: if isSignedIn();
+      
+      // ========== STOREUSERS SUBCOLLECTION ==========
+      match /storeUsers/{userId} {
+        // All authenticated users can read storeUsers
+        allow read: if isSignedIn();
+        // Only store owners can write storeUsers
+        allow write: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      // ========== PRODUCTS SUBCOLLECTION ==========
+      match /products/{productId} {
+        // All authenticated users can read products
+        allow read: if isSignedIn();
+        // Only store owners can write products
+        allow write: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      // ========== CATEGORIES SUBCOLLECTION ==========
+      match /categories/{categoryId} {
+        // All authenticated users can read categories
+        allow read: if isSignedIn();
+        // Only store owners can write categories
+        allow write: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      // ========== CUSTOMERS SUBCOLLECTION ==========
+      match /customers/{customerId} {
+        // ALL authenticated users can read, create, update customers
+        allow read, create, update: if isSignedIn();
+        // Only store owners can delete customers
+        allow delete: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      // ========== INVOICES SUBCOLLECTION ==========
+      match /invoices/{invoiceId} {
+        // ALL authenticated users can read, create, update invoices
+        allow read, create, update: if isSignedIn();
+        // Only store owners can delete invoices
+        allow delete: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      // ========== EMPLOYEES SUBCOLLECTION ==========
+      match /employees/{employeeId} {
+        // Only store owners can access employees
+        allow read, write: if isStoreOwner(storeId);
+        allow list: if isStoreOwner(storeId);
+      }
+      
+      // ========== ATTENDANCE SUBCOLLECTION ==========
+      match /attendance/{recordId} {
+        // Only store owners can access attendance
+        allow read, write: if isStoreOwner(storeId);
+        allow list: if isStoreOwner(storeId);
+      }
+      
+      // ========== SALARIES SUBCOLLECTION ==========
+      match /salaries/{recordId} {
+        // Only store owners can access salaries
+        allow read, write: if isStoreOwner(storeId);
+        allow list: if isStoreOwner(storeId);
+      }
+      
+      // ========== SETTINGS DOCUMENT ==========
+      match /settings/store {
+        // All authenticated users can read settings
+        allow read: if isSignedIn();
+        
+        // Store owners can write all settings
+        allow write: if isStoreOwner(storeId);
+        
+        // SPECIAL RULE: Allow ALL authenticated users to update ONLY the invoice counter
+        // This is critical for cashiers to generate sequential invoice numbers
+        allow update: if isSignedIn() &&
+          request.resource.data.keys().hasOnly(["lastInvoiceNumber", "updatedAt"]) &&
+          request.resource.data.lastInvoiceNumber is number &&
+          request.resource.data.lastInvoiceNumber > 0;
+          
+        // SPECIAL RULE: Allow ALL authenticated users to create settings with invoice counter
+        allow create: if isSignedIn() &&
+          request.resource.data.keys().hasAll(["lastInvoiceNumber", "updatedAt", "createdAt"]) &&
+          request.resource.data.lastInvoiceNumber is number &&
+          request.resource.data.lastInvoiceNumber > 0;
+      }
+    }
+    
+    // ========== PUBLIC INVOICE VIEW ==========
+    match /publicInvoices/{invoiceId} {
+      allow read: if true; // Public read access
+      allow write: if false; // No public write access
+    }
+    
+    // ========== DEFAULT DENY RULE ==========
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,67 @@
+# FIND CASHIER AUTH UID INSTRUCTIONS
+
+## Method 1: Check Firebase Console
+1. Go to Firebase Console (console.firebase.google.com)
+2. Select your project
+3. Go to "Authentication" section
+4. Click "Users" tab
+5. Find user with email: `arafatbusinessaihelp@gmail.com`
+6. Note the "User UID" column value
+
+## Method 2: Check Application Logs
+When cashier logs in, check browser console for logs showing:
+- Firebase user object
+- User UID
+- Authentication details
+
+Look for logs like:
+```
+User signed in: { uid: "actual-uid-here", email: "arafatbusinessaihelp@gmail.com" }
+```
+
+## Method 3: Add Debug Logging
+Add this code to your login function:
+
+```javascript
+import { getAuth, signInWithEmailAndPassword } from "firebase/auth";
+
+const auth = getAuth();
+signInWithEmailAndPassword(auth, email, password)
+  .then((userCredential) => {
+    const user = userCredential.user;
+    console.log("User UID:", user.uid);
+    console.log("User email:", user.email);
+    console.log("Full user object:", user);
+  })
+  .catch((error) => {
+    console.error("Login error:", error);
+  });
+```
+
+## Expected Result
+The cashier's Firebase Authentication UID might be something like:
+- `abc123def456...` (Firebase-generated UID)
+- Or a custom UID if using custom authentication
+
+## Once You Have the UID
+
+1. **Current document path**: `/stores/f1xTNTV7MpNIZeoAgpTfHOHnkig1/storeUsers/user_1766215060133`
+2. **New document path**: `/stores/f1xTNTV7MpNIZeoAgpTfHOHnkig1/storeUsers/{ACTUAL_AUTH_UID}`
+3. **Copy document data** from old to new path
+4. **Delete old document** (or keep as backup)
+
+## Alternative: Fix Rules
+If you can't change document ID, we can modify rules to check `id` field instead:
+
+```javascript
+function isStoreMember(storeId) {
+  return isStoreOwner(storeId) || 
+         (isSignedIn() && 
+          get(/databases/$(database)/documents/stores/$(storeId)/storeUsers/$(request.auth.uid)).data.id == request.auth.uid);
+}
+```
+
+But this requires the document to exist at path with ID = auth UID.
+
+## Immediate Test
+Deploy the simple test rules (`firestore-rules-test-simple.txt`) to verify cashier can access data when rules allow everything.

@@ -1,0 +1,175 @@
+# EXACT CHANGES NEEDED FOR ADMIN DASHBOARD ACCESS
+
+## STEP 1: ADD ADMIN FUNCTION
+After this line:
+```firestore
+    // Check if user is store owner (admin)
+    function isStoreOwner(storeId) {
+      return isSignedIn() && request.auth.uid == storeId;
+    }
+```
+
+Add this new function:
+```firestore
+    
+    // ========== NEW: SYSTEM ADMIN CHECK ==========
+    // Check if user is system admin (by email)
+    function isSystemAdmin() {
+      return isSignedIn() && (
+        // Check by email - admin users with @admin.com domain
+        request.auth.token.email.matches('.*@admin\\.com$')
+      );
+    }
+```
+
+## STEP 2: UPDATE ALL "allow read" RULES
+For EACH "allow read" rule, add "|| isSystemAdmin()" after "isSignedIn()"
+
+### Change 1: Store document
+FROM:
+```firestore
+    match /stores/{storeId} {
+      allow read: if isSignedIn();
+```
+
+TO:
+```firestore
+    match /stores/{storeId} {
+      allow read: if isSignedIn() || isSystemAdmin();
+```
+
+### Change 2: Products subcollection
+FROM:
+```firestore
+      match /products/{productId} {
+        allow read, create, update: if isSignedIn();
+```
+
+TO:
+```firestore
+      match /products/{productId} {
+        allow read, create, update: if isSignedIn() || isSystemAdmin();
+```
+
+### Change 3: Categories subcollection
+FROM:
+```firestore
+      match /categories/{categoryId} {
+        allow read, create, update: if isSignedIn();
+```
+
+TO:
+```firestore
+      match /categories/{categoryId} {
+        allow read, create, update: if isSignedIn() || isSystemAdmin();
+```
+
+### Change 4: Customers subcollection
+FROM:
+```firestore
+      match /customers/{customerId} {
+        allow read, create, update: if isSignedIn();
+```
+
+TO:
+```firestore
+      match /customers/{customerId} {
+        allow read, create, update: if isSignedIn() || isSystemAdmin();
+```
+
+### Change 5: Invoices subcollection
+FROM:
+```firestore
+      match /invoices/{invoiceId} {
+        allow read, create, update: if isSignedIn();
+```
+
+TO:
+```firestore
+      match /invoices/{invoiceId} {
+        allow read, create, update: if isSignedIn() || isSystemAdmin();
+```
+
+### Change 6: StoreUsers subcollection
+FROM:
+```firestore
+      match /storeUsers/{userId} {
+        allow read: if isSignedIn();
+```
+
+TO:
+```firestore
+      match /storeUsers/{userId} {
+        allow read: if isSignedIn() || isSystemAdmin();
+```
+
+### Change 7: StockHistory subcollection
+FROM:
+```firestore
+      match /stockHistory/{recordId} {
+        allow read, create, update: if isSignedIn();
+```
+
+TO:
+```firestore
+      match /stockHistory/{recordId} {
+        allow read, create, update: if isSignedIn() || isSystemAdmin();
+```
+
+### Change 8: DailyCounters subcollection
+FROM:
+```firestore
+      match /dailyCounters/{date} {
+        allow read, create, update: if isSignedIn();
+```
+
+TO:
+```firestore
+      match /dailyCounters/{date} {
+        allow read, create, update: if isSignedIn() || isSystemAdmin();
+```
+
+### Change 9: Settings document
+FROM:
+```firestore
+      match /settings/store {
+        allow read, write: if isSignedIn();
+```
+
+TO:
+```firestore
+      match /settings/store {
+        allow read, write: if isSignedIn() || isSystemAdmin();
+```
+
+## STEP 3: UPDATE "allow list" RULES
+Also update "allow list" rules similarly:
+
+### For store document:
+FROM:
+```firestore
+      allow list: if isSignedIn();
+```
+
+TO:
+```firestore
+      allow list: if isSignedIn() || isSystemAdmin();
+```
+
+### For all subcollections (products, categories, customers, invoices, storeUsers, stockHistory, dailyCounters):
+Change each "allow list: if isSignedIn();" to "allow list: if isSignedIn() || isSystemAdmin();"
+
+## STEP 4: CREATE ADMIN FIREBASE USER
+1. Go to Firebase Console → Authentication → Users
+2. Click "Add User"
+3. Enter:
+   - Email: admin@businesshub.com (MUST end with @admin.com)
+   - Password: lab5360
+4. Save the user
+
+## STEP 5: UPDATE ADMIN LOGIN IN APP.TSX
+The admin login needs to authenticate with Firebase using the email/password above.
+
+## QUICK ALTERNATIVE (LESS SECURE):
+If you don't want to create admin user, change ALL "allow read: if isSignedIn();" to "allow read: if true;" 
+This allows anyone (even unauthenticated) to read data - NOT RECOMMENDED for production.

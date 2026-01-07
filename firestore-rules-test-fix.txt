@@ -1,0 +1,179 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isSignedIn() { 
+      return request.auth != null; 
+    }
+    
+    function isStoreOwner(storeId) { 
+      return isSignedIn() && request.auth.uid == storeId; 
+    }
+    
+    // Get user email from auth token
+    function getUserEmail() {
+      return request.auth.token.email;
+    }
+    
+    // Check if user is admin (store owner)
+    function isAdmin(storeId) {
+      return isStoreOwner(storeId);
+    }
+    
+    // Check if user can read (temporarily allow all authenticated users for testing)
+    function canRead(storeId) {
+      return isSignedIn(); // TEMPORARY: Allow all authenticated users
+    }
+    
+    // Check if user can write (admin only)
+    function canWrite(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can access POS operations (temporarily allow all authenticated users)
+    function canAccessPOS(storeId) {
+      return isSignedIn(); // TEMPORARY: Allow all authenticated users
+    }
+    
+    // Check if user can manage products (admin only)
+    function canManageProducts(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can manage customers (admin only)
+    function canManageCustomers(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can view invoices (temporarily allow all authenticated users)
+    function canViewInvoices(storeId) {
+      return isSignedIn(); // TEMPORARY: Allow all authenticated users
+    }
+    
+    // Check if user can create invoices (temporarily allow all authenticated users)
+    function canCreateInvoices(storeId) {
+      return isSignedIn(); // TEMPORARY: Allow all authenticated users
+    }
+    
+    // Check if user can access settings (admin only)
+    function canAccessSettings(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can manage users (admin only)
+    function canManageUsers(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can access reports (admin only)
+    function canAccessReports(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can access employees (admin only)
+    function canAccessEmployees(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can access categories (admin only)
+    function canAccessCategories(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can read categories (temporarily allow all authenticated users)
+    function canReadCategories(storeId) {
+      return isSignedIn(); // TEMPORARY: Allow all authenticated users
+    }
+
+    // --- STORE DOCUMENT ---
+    match /stores/{storeId} {
+      // Store owners can read/write their store document
+      // All authenticated users can read store info for testing
+      allow read: if isSignedIn();
+      allow write: if isStoreOwner(storeId);
+      
+      // Allow queries on stores collection
+      allow list: if isSignedIn();
+      
+      // --- STOREUSERS SUBCOLLECTION (User Management) ---
+      match /storeUsers/{userId} {
+        // Admins can manage all users
+        // All authenticated users can read for testing
+        allow read: if isSignedIn();
+        allow write: if isAdmin(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      // --- PRODUCTS SUBCOLLECTION ---
+      match /products/{productId} { 
+        // All authenticated users can read products for POS testing
+        allow read: if canRead(storeId);
+        allow write: if canManageProducts(storeId);
+        allow list: if canRead(storeId);
+      }
+      
+      // --- CATEGORIES SUBCOLLECTION ---
+      match /categories/{categoryId} { 
+        // All authenticated users can read categories for POS testing
+        allow read: if canReadCategories(storeId);
+        allow write: if canAccessCategories(storeId);
+        allow list: if canReadCategories(storeId);
+      }
+      
+      // --- CUSTOMERS SUBCOLLECTION ---
+      match /customers/{customerId} { 
+        // All authenticated users can read customers for testing
+        allow read: if canRead(storeId);
+        allow write: if canManageCustomers(storeId);
+        allow list: if canRead(storeId);
+      }
+      
+      // --- INVOICES SUBCOLLECTION ---
+      match /invoices/{invoiceId} { 
+        // All authenticated users can view and create invoices for testing
+        allow read: if canViewInvoices(storeId);
+        allow create: if canCreateInvoices(storeId);
+        allow update, delete: if isAdmin(storeId) || isManager(storeId);
+        allow list: if canViewInvoices(storeId);
+      }
+      
+      // --- EMPLOYEES SUBCOLLECTION ---
+      match /employees/{employeeId} { 
+        // Only admins can access employees
+        allow read, write: if canAccessEmployees(storeId);
+        allow list: if canAccessEmployees(storeId);
+      }
+      
+      // --- ATTENDANCE SUBCOLLECTION ---
+      match /attendance/{recordId} { 
+        // Only admins can access attendance
+        allow read, write: if canAccessEmployees(storeId);
+        allow list: if canAccessEmployees(storeId);
+      }
+      
+      // --- SALARIES SUBCOLLECTION ---
+      match /salaries/{recordId} { 
+        // Only admins can access salaries
+        allow read, write: if canAccessEmployees(storeId);
+        allow list: if canAccessEmployees(storeId);
+      }
+      
+      // --- SETTINGS DOCUMENT ---
+      match /settings/store { 
+        // Only admins can access settings
+        allow read, write: if canAccessSettings(storeId);
+      }
+    }
+    
+    // --- PUBLIC INVOICE VIEW (Allow public access to invoice verification) ---
+    match /publicInvoices/{invoiceId} {
+      allow read: if true; // Public read access for invoice verification
+      allow write: if false; // No public write access
+    }
+    
+    // --- DEFAULT DENY RULE ---
+    match /{document=**} { 
+      allow read, write: if false; 
+    }
+  }
+}

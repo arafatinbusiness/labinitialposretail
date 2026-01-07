@@ -1,0 +1,126 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ========== HELPER FUNCTIONS ==========
+    
+    // Check if user is authenticated
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    // Check if user is store owner (admin) - user UID equals store ID
+    function isStoreOwner(storeId) {
+      return isSignedIn() && request.auth.uid == storeId;
+    }
+    
+    // Check if user is store user (cashier, manager, salesman) OR store owner
+    function isStoreMember(storeId) {
+      return isStoreOwner(storeId) || 
+             (isSignedIn() && exists(/databases/$(database)/documents/stores/$(storeId)/storeUsers/$(request.auth.uid)));
+    }
+    
+    // ========== STORE DOCUMENT ==========
+    match /stores/{storeId} {
+      // Allow ALL authenticated users to read stores (for authentication queries)
+      // Store owners can write their store document
+      allow read: if isSignedIn();
+      allow write: if isStoreOwner(storeId);
+      allow list: if isSignedIn();
+      
+      // ========== STOREUSERS SUBCOLLECTION (User Management) ==========
+      match /storeUsers/{userId} {
+        // Allow ALL authenticated users to read storeUsers (for authentication)
+        // Store owners can write storeUsers
+        allow read: if isSignedIn();
+        allow write: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      // ========== PRODUCTS SUBCOLLECTION ==========
+      match /products/{productId} {
+        // Store owners can read/write products
+        // Store users can read products (for POS)
+        allow read: if isStoreMember(storeId);
+        allow write: if isStoreOwner(storeId);
+        allow list: if isStoreMember(storeId);
+      }
+      
+      // ========== CATEGORIES SUBCOLLECTION ==========
+      match /categories/{categoryId} {
+        // Store owners can read/write categories
+        // Store users can read categories (for POS)
+        allow read: if isStoreMember(storeId);
+        allow write: if isStoreOwner(storeId);
+        allow list: if isStoreMember(storeId);
+      }
+      
+      // ========== CUSTOMERS SUBCOLLECTION ==========
+      match /customers/{customerId} {
+        // Store owners can read/write customers
+        // Store users can read customers
+        allow read: if isStoreMember(storeId);
+        allow write: if isStoreOwner(storeId);
+        allow list: if isStoreMember(storeId);
+      }
+      
+      // ========== INVOICES SUBCOLLECTION ==========
+      match /invoices/{invoiceId} {
+        // Store owners can read/write invoices
+        // Store users can read/create invoices (for POS)
+        allow read: if isStoreMember(storeId);
+        allow create: if isStoreMember(storeId);
+        allow update, delete: if isStoreOwner(storeId);
+        allow list: if isStoreMember(storeId);
+      }
+      
+      // ========== EMPLOYEES SUBCOLLECTION ==========
+      match /employees/{employeeId} {
+        // Only store owners can access employees
+        allow read, write: if isStoreOwner(storeId);
+        allow list: if isStoreOwner(storeId);
+      }
+      
+      // ========== ATTENDANCE SUBCOLLECTION ==========
+      match /attendance/{recordId} {
+        // Only store owners can access attendance
+        allow read, write: if isStoreOwner(storeId);
+        allow list: if isStoreOwner(storeId);
+      }
+      
+      // ========== SALARIES SUBCOLLECTION ==========
+      match /salaries/{recordId} {
+        // Only store owners can access salaries
+        allow read, write: if isStoreOwner(storeId);
+        allow list: if isStoreOwner(storeId);
+      }
+      
+      // ========== SETTINGS DOCUMENT ==========
+      match /settings/store {
+        // Store owners can read/write settings
+        // Store users can read settings
+        allow read: if isStoreMember(storeId);
+        allow write: if isStoreOwner(storeId);
+        
+        // Special rule: allow all store members to update only the invoice counter
+        // This is needed for sequential invoice numbering
+        allow update: if isStoreMember(storeId) &&
+          request.resource.data.keys().hasOnly(["lastInvoiceNumber", "updatedAt"]) &&
+          request.resource.data.lastInvoiceNumber is number &&
+          request.resource.data.lastInvoiceNumber > 0;
+      }
+    }
+    
+    // ========== PUBLIC INVOICE VIEW ==========
+    // Allow public access to invoice verification (read-only)
+    match /publicInvoices/{invoiceId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    
+    // ========== DEFAULT DENY RULE ==========
+    // Deny all other access by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

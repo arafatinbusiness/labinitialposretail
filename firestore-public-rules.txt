@@ -1,0 +1,62 @@
+# Firestore Security Rules for Public Invoice Access
+# These rules allow public read access to invoices for QR code verification
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Public read access to invoices for QR code verification
+    match /stores/{storeId}/invoices/{invoiceId} {
+      allow read: if true; // Public can read any invoice
+      allow write: if request.auth != null; // Only authenticated users can write
+    }
+    
+    // Public read access to business settings for invoice display
+    match /stores/{storeId}/settings/business {
+      allow read: if true; // Public can read business settings
+      allow write: if request.auth != null; // Only authenticated users can write
+    }
+    
+    // All other collections require authentication
+    match /stores/{storeId}/{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
+
+# Alternative: More restrictive rules for production
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Public read access only to specific invoice fields
+    match /stores/{storeId}/invoices/{invoiceId} {
+      allow read: if 
+        // Only allow read if the invoice exists and is not deleted
+        resource.data.status != 'deleted' &&
+        // Optionally restrict to invoices from last 30 days
+        (resource.data.date != null && 
+         request.time < timestamp.value(resource.data.date) + duration.value(30, 'd'));
+      allow write: if request.auth != null;
+    }
+    
+    // Public read access to business settings (name, address, phone only)
+    match /stores/{storeId}/settings/business {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    
+    // All other data requires authentication
+    match /stores/{storeId}/{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
+
+# Instructions for deploying these rules:
+# 1. Go to Firebase Console: https://console.firebase.google.com/
+# 2. Select your project
+# 3. Go to Firestore Database → Rules tab
+# 4. Replace existing rules with one of the above rule sets
+# 5. Click "Publish"
+
+# Note: For production, use the more restrictive rules to prevent data scraping
+# The QR codes will contain URLs like: https://inventoryinvoice.labinitial.com/invoice/{storeId}/{invoiceId}

@@ -1,0 +1,75 @@
+## QUICK FIX: Add ONE LINE to your Firestore Rules
+
+### Current Error:
+`Error getting user stores: FirebaseError: Missing or insufficient permissions.`
+
+### The Problem:
+Non-admin users (cashiers, managers, salesmen) can't query the stores collection to find which stores they belong to.
+
+### The Solution:
+Add this ONE LINE to your Firestore rules:
+
+```javascript
+// In your current rules, find this section:
+match /stores/{storeId} {
+  // Store owners can read/write their store document
+  // Store users can read store info
+  allow read: if isStoreOwner(storeId) || isStoreUser(storeId);
+  allow write: if isStoreOwner(storeId);
+  
+  // ADD THIS LINE RIGHT HERE:
+  allow list: if isSignedIn(); // Any authenticated user can query stores
+  
+  // The rest of your rules continue here...
+```
+
+### Complete Fixed Section:
+```javascript
+match /stores/{storeId} {
+  // Store owners can read/write their store document
+  // Store users can read store info
+  allow read: if isStoreOwner(storeId) || isStoreUser(storeId);
+  allow write: if isStoreOwner(storeId);
+  
+  // --- CRITICAL FIX: Allow queries on stores collection ---
+  // This allows users to query stores to find which ones they belong to
+  allow list: if isSignedIn(); // Any authenticated user can query stores
+  
+  // --- STOREUSERS SUBCOLLECTION (User Management) ---
+  match /storeUsers/{userId} {
+    // Admins can manage all users
+    // Users can read their own user document
+    allow read: if isAdmin(storeId) || (isSignedIn() && request.auth.uid == userId);
+    allow write: if isAdmin(storeId);
+  }
+  
+  // ... rest of your rules
+}
+```
+
+### Why This Works:
+1. **`allow read`** = permission to read individual documents
+2. **`allow list`** = permission to query/scan the collection
+3. The `getUserStores()` function needs `allow list` permission to run this query:
+   ```typescript
+   const storesQuery = query(
+     collection(db, STORES_COLLECTION),
+     where('storeUsers', 'array-contains', userId)
+   );
+   ```
+
+### Steps to Fix:
+1. Go to [Firebase Console](https://console.firebase.google.com/)
+2. Select your project: `business-management-70fd4`
+3. Go to **Firestore Database** → **Rules** tab
+4. Find the `match /stores/{storeId} {` section
+5. Add `allow list: if isSignedIn();` after the `allow read` and `allow write` lines
+6. Click **"Publish"**
+
+### Test Immediately:
+1. Try creating a non-admin (cashier) account again
+2. The system should now find the store associations
+3. The user should login successfully
+
+### Security Note:
+This only allows **authenticated users** to query stores. They still need to be in the `storeUsers` array to actually read store data. It's safe and necessary for the multi-user system to work.

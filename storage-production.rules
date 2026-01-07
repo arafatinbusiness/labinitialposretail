@@ -1,0 +1,36 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Allow public read access for all files (images can be viewed by anyone)
+    match /{allPaths=**} {
+      allow read: if true;
+    }
+    
+    // Store-specific write permissions
+    match /stores/{storeId}/{document=**} {
+      // Allow authenticated users to write to their store directory
+      allow write: if request.auth != null;
+    }
+    
+    // More specific rules for product images
+    match /stores/{storeId}/products/{productId}/{imageName} {
+      // Validate file type and size
+      allow write: if request.auth != null &&
+        request.resource.size < 5 * 1024 * 1024 && // 5MB limit
+        request.resource.contentType.matches('image/.*');
+      
+      allow read: if true; // Public read
+    }
+    
+    // User profile images
+    match /users/{userId}/profile/{imageName} {
+      // Users can only write to their own profile
+      allow write: if request.auth != null && 
+        request.auth.uid == userId &&
+        request.resource.size < 2 * 1024 * 1024 && // 2MB limit
+        request.resource.contentType.matches('image/.*');
+      
+      allow read: if true; // Public read
+    }
+  }
+}

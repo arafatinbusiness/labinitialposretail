@@ -1,0 +1,103 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ========== ENTERPRISE INVOICE COUNTER RULES ==========
+    
+    // Check if user is authenticated
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    // Check if user is store owner (admin)
+    function isStoreOwner(storeId) {
+      return isSignedIn() && request.auth.uid == storeId;
+    }
+    
+    // ========== STORE DOCUMENT ==========
+    match /stores/{storeId} {
+      allow read: if isSignedIn();
+      allow write: if isStoreOwner(storeId);
+      allow list: if isSignedIn();
+      
+      // ========== DAILY COUNTERS COLLECTION ==========
+      // For enterprise invoice numbering: INV-25122025-001
+      // Critical: All authenticated users can increment counters
+      // Only store owners can delete/reset counters
+      match /dailyCounters/{date} {
+        allow read: if isSignedIn();
+        allow create, update: if isSignedIn(); // Cashiers can create/update
+        allow delete: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      // ========== ALL SUBCOLLECTIONS ==========
+      match /products/{productId} {
+        allow read, create, update: if isSignedIn();
+        allow delete: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      match /categories/{categoryId} {
+        allow read, create, update: if isSignedIn();
+        allow delete: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      match /customers/{customerId} {
+        allow read, create, update: if isSignedIn();
+        allow delete: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      match /invoices/{invoiceId} {
+        allow read, create, update: if isSignedIn();
+        allow delete: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      match /stockHistory/{recordId} {
+        allow read, create, update: if isSignedIn();
+        allow delete: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      // ========== SENSITIVE SUBCOLLECTIONS ==========
+      match /employees/{employeeId} {
+        allow read, write: if isStoreOwner(storeId);
+        allow list: if isStoreOwner(storeId);
+      }
+      
+      match /attendance/{recordId} {
+        allow read, write: if isStoreOwner(storeId);
+        allow list: if isStoreOwner(storeId);
+      }
+      
+      match /salaries/{recordId} {
+        allow read, write: if isStoreOwner(storeId);
+        allow list: if isStoreOwner(storeId);
+      }
+      
+      match /storeUsers/{userId} {
+        allow read: if isSignedIn();
+        allow write: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      // ========== SETTINGS DOCUMENT ==========
+      match /settings/store {
+        allow read, write: if isSignedIn();
+      }
+    }
+    
+    // ========== PUBLIC INVOICE VIEW ==========
+    match /publicInvoices/{invoiceId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    
+    // ========== DEFAULT DENY RULE ==========
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

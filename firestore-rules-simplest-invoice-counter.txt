@@ -1,0 +1,92 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ========== SIMPLEST RULES ==========
+    // All authenticated users can do everything they need for POS
+    
+    // Check if user is authenticated
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    // Check if user is store owner (admin)
+    function isStoreOwner(storeId) {
+      return isSignedIn() && request.auth.uid == storeId;
+    }
+    
+    // ========== STORE DOCUMENT ==========
+    match /stores/{storeId} {
+      allow read: if isSignedIn();
+      allow write: if isStoreOwner(storeId);
+      allow list: if isSignedIn();
+      
+      // ========== ALL SUBCOLLECTIONS ==========
+      // For POS operations: read, create, update everything
+      // Only store owners can delete
+      
+      match /products/{productId} {
+        allow read, create, update: if isSignedIn();
+        allow delete: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      match /categories/{categoryId} {
+        allow read, create, update: if isSignedIn();
+        allow delete: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      match /customers/{customerId} {
+        allow read, create, update: if isSignedIn();
+        allow delete: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      match /invoices/{invoiceId} {
+        allow read, create, update: if isSignedIn();
+        allow delete: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      // ========== SENSITIVE SUBCOLLECTIONS ==========
+      match /employees/{employeeId} {
+        allow read, write: if isStoreOwner(storeId);
+        allow list: if isStoreOwner(storeId);
+      }
+      
+      match /attendance/{recordId} {
+        allow read, write: if isStoreOwner(storeId);
+        allow list: if isStoreOwner(storeId);
+      }
+      
+      match /salaries/{recordId} {
+        allow read, write: if isStoreOwner(storeId);
+        allow list: if isStoreOwner(storeId);
+      }
+      
+      match /storeUsers/{userId} {
+        allow read: if isSignedIn();
+        allow write: if isStoreOwner(storeId);
+        allow list: if isSignedIn();
+      }
+      
+      // ========== SETTINGS DOCUMENT ==========
+      // SIMPLEST: Allow all authenticated users to read and write settings
+      // This fixes invoice counter updates
+      match /settings/store {
+        allow read, write: if isSignedIn();
+      }
+    }
+    
+    // ========== PUBLIC INVOICE VIEW ==========
+    match /publicInvoices/{invoiceId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    
+    // ========== DEFAULT DENY RULE ==========
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

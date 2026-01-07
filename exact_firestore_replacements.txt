@@ -1,0 +1,173 @@
+# EXACT REPLACEMENTS FOR FIRESTORE RULES
+
+## REPLACEMENT 1: Add admin function
+SEARCH FOR:
+```firestore
+    // Check if user is store owner (admin)
+    function isStoreOwner(storeId) {
+      return isSignedIn() && request.auth.uid == storeId;
+    }
+```
+
+REPLACE WITH:
+```firestore
+    // Check if user is store owner (admin)
+    function isStoreOwner(storeId) {
+      return isSignedIn() && request.auth.uid == storeId;
+    }
+    
+    // ========== NEW: SYSTEM ADMIN CHECK ==========
+    // Check if user is system admin (by email)
+    function isSystemAdmin() {
+      return isSignedIn() && (
+        // Check by email - admin users with @admin.com domain
+        request.auth.token.email.matches('.*@admin\\.com$')
+      );
+    }
+```
+
+## REPLACEMENT 2: Update store document read rule
+SEARCH FOR:
+```firestore
+    match /stores/{storeId} {
+      allow read: if isSignedIn();
+```
+
+REPLACE WITH:
+```firestore
+    match /stores/{storeId} {
+      allow read: if isSignedIn() || isSystemAdmin();
+```
+
+## REPLACEMENT 3: Update store document list rule
+SEARCH FOR:
+```firestore
+      allow list: if isSignedIn();
+```
+
+REPLACE WITH:
+```firestore
+      allow list: if isSignedIn() || isSystemAdmin();
+```
+
+## REPLACEMENT 4: Update products subcollection
+SEARCH FOR:
+```firestore
+      match /products/{productId} {
+        allow read, create, update: if isSignedIn();
+```
+
+REPLACE WITH:
+```firestore
+      match /products/{productId} {
+        allow read, create, update: if isSignedIn() || isSystemAdmin();
+```
+
+## REPLACEMENT 5: Update categories subcollection
+SEARCH FOR:
+```firestore
+      match /categories/{categoryId} {
+        allow read, create, update: if isSignedIn();
+```
+
+REPLACE WITH:
+```firestore
+      match /categories/{categoryId} {
+        allow read, create, update: if isSignedIn() || isSystemAdmin();
+```
+
+## REPLACEMENT 6: Update customers subcollection
+SEARCH FOR:
+```firestore
+      match /customers/{customerId} {
+        allow read, create, update: if isSignedIn();
+```
+
+REPLACE WITH:
+```firestore
+      match /customers/{customerId} {
+        allow read, create, update: if isSignedIn() || isSystemAdmin();
+```
+
+## REPLACEMENT 7: Update invoices subcollection
+SEARCH FOR:
+```firestore
+      match /invoices/{invoiceId} {
+        allow read, create, update: if isSignedIn();
+```
+
+REPLACE WITH:
+```firestore
+      match /invoices/{invoiceId} {
+        allow read, create, update: if isSignedIn() || isSystemAdmin();
+```
+
+## REPLACEMENT 8: Update storeUsers subcollection
+SEARCH FOR:
+```firestore
+      match /storeUsers/{userId} {
+        allow read: if isSignedIn();
+```
+
+REPLACE WITH:
+```firestore
+      match /storeUsers/{userId} {
+        allow read: if isSignedIn() || isSystemAdmin();
+```
+
+## REPLACEMENT 9: Update stockHistory subcollection
+SEARCH FOR:
+```firestore
+      match /stockHistory/{recordId} {
+        allow read, create, update: if isSignedIn();
+```
+
+REPLACE WITH:
+```firestore
+      match /stockHistory/{recordId} {
+        allow read, create, update: if isSignedIn() || isSystemAdmin();
+```
+
+## REPLACEMENT 10: Update dailyCounters subcollection
+SEARCH FOR:
+```firestore
+      match /dailyCounters/{date} {
+        allow read, create, update: if isSignedIn();
+```
+
+REPLACE WITH:
+```firestore
+      match /dailyCounters/{date} {
+        allow read, create, update: if isSignedIn() || isSystemAdmin();
+```
+
+## REPLACEMENT 11: Update settings document
+SEARCH FOR:
+```firestore
+      match /settings/store {
+        allow read, write: if isSignedIn();
+```
+
+REPLACE WITH:
+```firestore
+      match /settings/store {
+        allow read, write: if isSignedIn() || isSystemAdmin();
+```
+
+## IMPORTANT: Also update ALL "allow list" rules in subcollections
+For EACH subcollection (products, categories, customers, invoices, storeUsers, stockHistory, dailyCounters):
+
+SEARCH FOR:
+```firestore
+        allow list: if isSignedIn();
+```
+
+REPLACE WITH:
+```firestore
+        allow list: if isSignedIn() || isSystemAdmin();
+```
+
+## AFTER MAKING THESE CHANGES:
+1. Create Firebase user with email ending in @admin.com (e.g., admin@businesshub.com)
+2. Password: lab5360
+3. Update admin login in App.tsx to use this email/password

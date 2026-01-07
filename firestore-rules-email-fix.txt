@@ -1,0 +1,232 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isSignedIn() { 
+      return request.auth != null; 
+    }
+    
+    function isStoreOwner(storeId) { 
+      return isSignedIn() && request.auth.uid == storeId; 
+    }
+    
+    // Get user email from auth token
+    function getUserEmail() {
+      return request.auth.token.email;
+    }
+    
+    // Check if user exists in storeUsers collection BY EMAIL
+    function isStoreUser(storeId) {
+      return isSignedIn() && 
+        exists(
+          /databases/$(database)/documents/stores/$(storeId)/storeUsers[
+            getUserEmail() == request.resource.data.email
+          ]
+        );
+    }
+    
+    // Get user role from storeUsers collection BY EMAIL
+    function getUserRole(storeId) {
+      let storeUsersCollection = /databases/$(database)/documents/stores/$(storeId)/storeUsers;
+      // We need to find the user document by email
+      // This is a simplified version - in practice, you might need a different approach
+      for (let userDoc in get(storeUsersCollection).data) {
+        if (userDoc.data.email == getUserEmail()) {
+          return userDoc.data.role;
+        }
+      }
+      return null;
+    }
+    
+    // Check if user has specific role
+    function hasRole(storeId, role) {
+      return isStoreUser(storeId) && getUserRole(storeId) == role;
+    }
+    
+    // Check if user is admin (store owner or has admin role)
+    function isAdmin(storeId) {
+      return isStoreOwner(storeId) || hasRole(storeId, 'admin');
+    }
+    
+    // Check if user is manager
+    function isManager(storeId) {
+      return hasRole(storeId, 'manager');
+    }
+    
+    // Check if user is cashier
+    function isCashier(storeId) {
+      return hasRole(storeId, 'cashier');
+    }
+    
+    // Check if user is salesman
+    function isSalesman(storeId) {
+      return hasRole(storeId, 'salesman');
+    }
+    
+    // Check if user can read (any associated user)
+    function canRead(storeId) {
+      return isStoreOwner(storeId) || isStoreUser(storeId);
+    }
+    
+    // Check if user can write (admin only for sensitive operations)
+    function canWrite(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can access POS operations
+    function canAccessPOS(storeId) {
+      return isAdmin(storeId) || isManager(storeId) || isCashier(storeId) || isSalesman(storeId);
+    }
+    
+    // Check if user can manage products
+    function canManageProducts(storeId) {
+      return isAdmin(storeId) || isManager(storeId);
+    }
+    
+    // Check if user can manage customers
+    function canManageCustomers(storeId) {
+      return isAdmin(storeId) || isManager(storeId);
+    }
+    
+    // Check if user can view invoices
+    function canViewInvoices(storeId) {
+      return isAdmin(storeId) || isManager(storeId) || isSalesman(storeId);
+    }
+    
+    // Check if user can create invoices (POS)
+    function canCreateInvoices(storeId) {
+      return isAdmin(storeId) || isManager(storeId) || isCashier(storeId) || isSalesman(storeId);
+    }
+    
+    // Check if user can access settings
+    function canAccessSettings(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can manage users
+    function canManageUsers(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can access reports
+    function canAccessReports(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can access employees
+    function canAccessEmployees(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can access categories
+    function canAccessCategories(storeId) {
+      return isAdmin(storeId) || isManager(storeId);
+    }
+    
+    // Check if user can read categories (for POS)
+    function canReadCategories(storeId) {
+      return canRead(storeId); // All store users can read categories for POS
+    }
+
+    // --- STORE DOCUMENT ---
+    match /stores/{storeId} {
+      // Store owners can read/write their store document
+      // Store users can read store info
+      allow read: if isStoreOwner(storeId) || isStoreUser(storeId);
+      allow write: if isStoreOwner(storeId);
+      
+      // --- CRITICAL FIX: Allow queries on stores collection ---
+      // This allows users to query stores to find which ones they belong to
+      allow list: if isSignedIn(); // Any authenticated user can query stores
+      
+      // --- STOREUSERS SUBCOLLECTION (User Management) ---
+      match /storeUsers/{userId} {
+        // Admins can manage all users
+        // Users can read their own user document (by email match)
+        allow read: if isAdmin(storeId) || (isSignedIn() && getUserEmail() == resource.data.email);
+        allow write: if isAdmin(storeId);
+        // Allow queries on storeUsers collection for email lookup
+        allow list: if isSignedIn(); // Allow authenticated users to query storeUsers
+      }
+      
+      // --- PRODUCTS SUBCOLLECTION ---
+      match /products/{productId} { 
+        // Admins and managers can manage products
+        // All store users can read products for POS
+        allow read: if canRead(storeId);
+        allow write: if canManageProducts(storeId);
+        // Allow queries/list for real-time subscriptions
+        allow list: if canRead(storeId);
+      }
+      
+      // --- CATEGORIES SUBCOLLECTION ---
+      match /categories/{categoryId} { 
+        // Admins and managers can manage categories
+        // All store users can read categories for POS
+        allow read: if canReadCategories(storeId);
+        allow write: if canAccessCategories(storeId);
+        // Allow queries/list for real-time subscriptions - CRITICAL FIX
+        allow list: if canReadCategories(storeId);
+      }
+      
+      // --- CUSTOMERS SUBCOLLECTION ---
+      match /customers/{customerId} { 
+        // Admins and managers can manage customers
+        // All store users can read customers
+        allow read: if canRead(storeId);
+        allow write: if canManageCustomers(storeId);
+        // Allow queries/list for real-time subscriptions
+        allow list: if canRead(storeId);
+      }
+      
+      // --- INVOICES SUBCOLLECTION ---
+      match /invoices/{invoiceId} { 
+        // Admins, managers, and salesmen can view invoices
+        // Admins, managers, cashiers, and salesmen can create invoices
+        allow read: if canViewInvoices(storeId);
+        allow create: if canCreateInvoices(storeId);
+        allow update, delete: if isAdmin(storeId) || isManager(storeId);
+        // Allow queries/list for real-time subscriptions
+        allow list: if canViewInvoices(storeId);
+      }
+      
+      // --- EMPLOYEES SUBCOLLECTION ---
+      match /employees/{employeeId} { 
+        // Only admins can access employees
+        allow read, write: if canAccessEmployees(storeId);
+        allow list: if canAccessEmployees(storeId);
+      }
+      
+      // --- ATTENDANCE SUBCOLLECTION ---
+      match /attendance/{recordId} { 
+        // Only admins can access attendance
+        allow read, write: if canAccessEmployees(storeId);
+        allow list: if canAccessEmployees(storeId);
+      }
+      
+      // --- SALARIES SUBCOLLECTION ---
+      match /salaries/{recordId} { 
+        // Only admins can access salaries
+        allow read, write: if canAccessEmployees(storeId);
+        allow list: if canAccessEmployees(storeId);
+      }
+      
+      // --- SETTINGS DOCUMENT ---
+      match /settings/store { 
+        // Only admins can access settings
+        allow read, write: if canAccessSettings(storeId);
+      }
+    }
+    
+    // --- PUBLIC INVOICE VIEW (Allow public access to invoice verification) ---
+    match /publicInvoices/{invoiceId} {
+      allow read: if true; // Public read access for invoice verification
+      allow write: if false; // No public write access
+    }
+    
+    // --- DEFAULT DENY RULE ---
+    match /{document=**} { 
+      allow read, write: if false; 
+    }
+  }
+}

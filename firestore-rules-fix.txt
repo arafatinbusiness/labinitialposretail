@@ -1,0 +1,291 @@
+## Updated Firestore Security Rules with Query Support for Store Users
+
+Add the following rule to your Firestore security rules. The key addition is allowing **queries on the stores collection** so users can find which stores they belong to:
+
+```javascript
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isSignedIn() { 
+      return request.auth != null; 
+    }
+    
+    function isStoreOwner(storeId) { 
+      return isSignedIn() && request.auth.uid == storeId; 
+    }
+    
+    // Check if user exists in storeUsers collection
+    function isStoreUser(storeId) {
+      return isSignedIn() && 
+        exists(/databases/$(database)/documents/stores/$(storeId)/storeUsers/$(request.auth.uid));
+    }
+    
+    // Get user role from storeUsers collection
+    function getUserRole(storeId) {
+      let userDoc = get(/databases/$(database)/documents/stores/$(storeId)/storeUsers/$(request.auth.uid));
+      return userDoc.data.role;
+    }
+    
+    // Check if user has specific role
+    function hasRole(storeId, role) {
+      return isStoreUser(storeId) && getUserRole(storeId) == role;
+    }
+    
+    // Check if user is admin (store owner or has admin role)
+    function isAdmin(storeId) {
+      return isStoreOwner(storeId) || hasRole(storeId, 'admin');
+    }
+    
+    // Check if user is manager
+    function isManager(storeId) {
+      return hasRole(storeId, 'manager');
+    }
+    
+    // Check if user is cashier
+    function isCashier(storeId) {
+      return hasRole(storeId, 'cashier');
+    }
+    
+    // Check if user is salesman
+    function isSalesman(storeId) {
+      return hasRole(storeId, 'salesman');
+    }
+    
+    // Check if user can read (any associated user)
+    function canRead(storeId) {
+      return isStoreOwner(storeId) || isStoreUser(storeId);
+    }
+    
+    // Check if user can write (admin only for sensitive operations)
+    function canWrite(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can access POS operations
+    function canAccessPOS(storeId) {
+      return isAdmin(storeId) || isManager(storeId) || isCashier(storeId) || isSalesman(storeId);
+    }
+    
+    // Check if user can manage products
+    function canManageProducts(storeId) {
+      return isAdmin(storeId) || isManager(storeId);
+    }
+    
+    // Check if user can manage customers
+    function canManageCustomers(storeId) {
+      return isAdmin(storeId) || isManager(storeId);
+    }
+    
+    // Check if user can view invoices
+    function canViewInvoices(storeId) {
+      return isAdmin(storeId) || isManager(storeId) || isSalesman(storeId);
+    }
+    
+    // Check if user can create invoices (POS)
+    function canCreateInvoices(storeId) {
+      return isAdmin(storeId) || isManager(storeId) || isCashier(storeId) || isSalesman(storeId);
+    }
+    
+    // Check if user can access settings
+    function canAccessSettings(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can manage users
+    function canManageUsers(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can access reports
+    function canAccessReports(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can access employees
+    function canAccessEmployees(storeId) {
+      return isAdmin(storeId);
+    }
+    
+    // Check if user can access categories
+    function canAccessCategories(storeId) {
+      return isAdmin(storeId) || isManager(storeId);
+    }
+    
+    // Check if user can read categories (for POS)
+    function canReadCategories(storeId) {
+      return canRead(storeId); // All store users can read categories for POS
+    }
+
+    // --- STORE DOCUMENT ---
+    match /stores/{storeId} {
+      // Store owners can read/write their store document
+      // Store users can read store info
+      allow read: if isStoreOwner(storeId) || isStoreUser(storeId);
+      allow write: if isStoreOwner(storeId);
+      
+      // --- CRITICAL FIX: Allow queries on stores collection ---
+      // This allows users to query stores to find which ones they belong to
+      allow list: if isSignedIn(); // Any authenticated user can query stores
+      
+      // --- STOREUSERS SUBCOLLECTION (User Management) ---
+      match /storeUsers/{userId} {
+        // Admins can manage all users
+        // Users can read their own user document
+        allow read: if isAdmin(storeId) || (isSignedIn() && request.auth.uid == userId);
+        allow write: if isAdmin(storeId);
+        // Allow queries on storeUsers collection for email lookup
+        allow list: if isSignedIn(); // Allow authenticated users to query storeUsers
+      }
+      
+      // --- PRODUCTS SUBCOLLECTION ---
+      match /products/{productId} { 
+        // Admins and managers can manage products
+        // All store users can read products for POS
+        allow read: if canRead(storeId);
+        allow write: if canManageProducts(storeId);
+      }
+      
+      // --- CATEGORIES SUBCOLLECTION ---
+      match /categories/{categoryId} { 
+        // Admins and managers can manage categories
+        // All store users can read categories for POS
+        allow read: if canReadCategories(storeId);
+        allow write: if canAccessCategories(storeId);
+        // Allow queries/list for real-time subscriptions
+        allow list: if canReadCategories(storeId);
+      // --- CUSTOMERS SUBCOLLECTION ---
+      match /customers/{customerId} { 
+        // Admins and managers can manage customers
+        // All store users can read customers
+        allow read: if canRead(storeId);
+        allow write: if canManageCustomers(storeId);
+      }
+      
+      // --- INVOICES SUBCOLLECTION ---
+      match /invoices/{invoiceId} { 
+        // Admins, managers, and salesmen can view invoices
+        // Admins, managers, cashiers, and salesmen can create invoices
+        allow read: if canViewInvoices(storeId);
+        allow create: if canCreateInvoices(storeId);
+        allow update, delete: if isAdmin(storeId) || isManager(storeId);
+      }
+      
+      // --- EMPLOYEES SUBCOLLECTION ---
+      match /employees/{employeeId} { 
+        // Only admins can access employees
+        allow read, write: if canAccessEmployees(storeId);
+      }
+      
+      // --- ATTENDANCE SUBCOLLECTION ---
+      match /attendance/{recordId} { 
+        // Only admins can access attendance
+        allow read, write: if canAccessEmployees(storeId);
+      }
+      
+      // --- SALARIES SUBCOLLECTION ---
+      match /salaries/{recordId} { 
+        // Only admins can access salaries
+        allow read, write: if canAccessEmployees(storeId);
+      }
+      
+      // --- SETTINGS DOCUMENT ---
+      match /settings/store { 
+        // Only admins can access settings
+        allow read, write: if canAccessSettings(storeId);
+      }
+    }
+    
+    // --- PUBLIC INVOICE VIEW (Allow public access to invoice verification) ---
+    match /publicInvoices/{invoiceId} {
+      allow read: if true; // Public read access for invoice verification
+      allow write: if false; // No public write access
+    }
+    
+    // --- DEFAULT DENY RULE ---
+    match /{document=**} { 
+      allow read, write: if false; 
+    }
+  }
+}
+```
+
+## **What Changed:**
+
+### **Critical Addition (Line 97):**
+```javascript
+allow list: if isSignedIn(); // Any authenticated user can query stores
+```
+
+### **Why This Fixes the Problem:**
+1. **Before**: Users could only read individual store documents if they were store owners or store users
+2. **After**: Users can now **query** the stores collection to find which stores contain their user ID in the `storeUsers` array
+
+### **How the Query Works:**
+The `getUserStores()` function queries:
+```typescript
+const storesQuery = query(
+  collection(db, STORES_COLLECTION),
+  where('storeUsers', 'array-contains', userId)
+);
+```
+
+This query needs permission to **list/query** the stores collection, not just read individual documents.
+
+## **Alternative Solution (If Query Permission is Too Broad):**
+
+If you don't want to allow all authenticated users to query stores, you can modify the `getUserStores()` function to work differently:
+
+```typescript
+// Alternative approach: Get store IDs from storeUsers subcollections
+async getUserStores(userId: string): Promise<UserStoreAssociation[]> {
+  try {
+    // Get all store documents where this user has a storeUsers entry
+    // This requires a different data structure or a separate index
+    const userStores: UserStoreAssociation[] = [];
+    
+    // Get all stores (this requires admin permission or the query permission above)
+    const storesSnapshot = await getDocs(collection(db, STORES_COLLECTION));
+    
+    for (const storeDoc of storesSnapshot.docs) {
+      const storeId = storeDoc.id;
+      const storeUserDoc = await getDoc(doc(db, STORES_COLLECTION, storeId, 'storeUsers', userId));
+      
+      if (storeUserDoc.exists()) {
+        const storeUser = storeUserDoc.data() as StoreUser;
+        const storeData = storeDoc.data() as StoreAccount;
+        userStores.push({
+          userId,
+          storeId,
+          role: storeUser.role,
+          storeName: storeData.name
+        });
+      }
+    }
+    
+    return userStores;
+  } catch (error) {
+    console.error('Error getting user stores:', error);
+    return [];
+  }
+}
+```
+
+## **Recommended Approach:**
+
+**Use the updated rules with `allow list: if isSignedIn()`** - it's the simplest and most efficient solution.
+
+## **How to Update Firestore Rules:**
+
+1. Go to Firebase Console → Firestore Database → Rules tab
+2. Replace the existing rules with the updated rules above
+3. Click "Publish"
+
+## **Testing the Fix:**
+
+After updating the rules:
+1. Try creating a non-admin (cashier) account again
+2. The system should now be able to find the user's store associations
+3. The user should be able to login successfully
+
+The error `Missing or insufficient permissions` should be resolved.
