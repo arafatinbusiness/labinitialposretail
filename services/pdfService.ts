@@ -6,7 +6,209 @@ import { ExcelService } from './excelService';
 import { CurrencyService } from './currencyService';
 import { PUBLIC_INVOICE_BASE_URL } from '../constants';
 
+// Helper function to detect if text contains Bengali characters
+function containsBengali(text: string): boolean {
+  if (!text) return false;
+  // Bengali Unicode range: U+0980–U+09FF
+  const bengaliRegex = /[\u0980-\u09FF]/;
+  return bengaliRegex.test(text);
+}
+
+// Helper function to check if invoice contains Bengali text
+function invoiceContainsBengali(invoice: Invoice, business: BusinessSettings): boolean {
+  // Check business name (including Arabic name)
+  if (containsBengali(business.name) || containsBengali(business.nameArabic || '')) {
+    return true;
+  }
+  
+  // Check customer name
+  if (containsBengali(invoice.customerName)) {
+    return true;
+  }
+  
+  // Check items
+  for (const item of invoice.items) {
+    if (containsBengali(item.name) || containsBengali(item.adjustmentReason || '')) {
+      return true;
+    }
+  }
+  
+  // Check created by name
+  if (invoice.createdBy && containsBengali(invoice.createdBy.name)) {
+    return true;
+  }
+  
+  return false;
+}
+
+// Helper function to get appropriate font family
+function getFontFamily(text: string, hasBengaliFont: boolean): string {
+  if (hasBengaliFont && containsBengali(text)) {
+    return 'SutonnyMJ'; // Use Bengali font for Bengali text
+  }
+  return 'helvetica'; // Use default font for non-Bengali text or if Bengali font not available
+}
+
+// Helper function to set font for text
+function setFontForText(doc: jsPDF, text: string, hasBengaliFont: boolean, style: 'normal' | 'bold' | 'italic' | 'bolditalic' = 'normal') {
+  const fontFamily = getFontFamily(text, hasBengaliFont);
+  doc.setFont(fontFamily, style);
+}
+
+// Try to add Bengali font to jsPDF if available
+async function tryAddBengaliFont(doc: jsPDF): Promise<boolean> {
+  try {
+    // Check if font is already added
+    if (doc.getFontList()['SutonnyMJ']) {
+      return true;
+    }
+    
+    // Try to load the font from the public directory
+    // The font is now at /SutonnyMJ-Regular.ttf (no spaces)
+    const fontUrl = '/SutonnyMJ-Regular.ttf';
+    
+    // Try to fetch the font
+    const response = await fetch(fontUrl);
+    if (!response.ok) {
+      console.warn('Bengali font not found at', fontUrl);
+      return false;
+    }
+    
+    const fontArrayBuffer = await response.arrayBuffer();
+    
+    // Convert ArrayBuffer to base64
+    const fontBase64 = arrayBufferToBase64(fontArrayBuffer);
+    
+    // Add the font to jsPDF
+    doc.addFileToVFS('SutonnyMJ.ttf', fontBase64);
+    doc.addFont('SutonnyMJ.ttf', 'SutonnyMJ', 'normal');
+    
+    console.log('Bengali font (SutonnyMJ) successfully loaded for PDF generation');
+    return true;
+  } catch (error) {
+    console.warn('Failed to add Bengali font to PDF:', error);
+    return false;
+  }
+}
+
+// Helper function to convert ArrayBuffer to base64
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return window.btoa(binary);
+}
+
 export class PDFService {
+  /**
+   * Generate invoice PDF using Puppeteer serverless API (for Bengali font support)
+   */
+  static async generateInvoicePDFWithPuppeteer(
+    invoice: Invoice,
+    business: BusinessSettings,
+    isReprint: boolean = false,
+    storeId?: string
+  ): Promise<Blob> {
+    try {
+      console.log(`[PDFService] Using Puppeteer API for invoice ${invoice.id} (Bengali detected)`);
+      
+      // Determine format based on business settings
+      const format = business.printFormat === 'thermal' ? 'thermal' : 'a4';
+      
+      // Prepare request data
+      const requestData = {
+        invoice,
+        business,
+        format,
+        isReprint
+      };
+      
+      // Always use relative URL - Vercel will handle routing in production
+      // For local development, use `vercel dev` to serve the API route
+      const apiUrl = '/api/generate-pdf';
+      console.log(`[PDFService] Calling Puppeteer API at: ${apiUrl}`);
+      
+      // Call the serverless API
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestData),
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[PDFService] Puppeteer API failed: ${response.status}`, errorText);
+        throw new Error(`PDF generation failed: ${response.status}`);
+      }
+      
+      // Get PDF as blob
+      const pdfBlob = await response.blob();
+      console.log(`[PDFService] Puppeteer PDF generated successfully: ${pdfBlob.size} bytes`);
+      
+      return pdfBlob;
+      
+    } catch (error) {
+      console.error('[PDFService] Puppeteer PDF generation failed, falling back to jsPDF:', error);
+      
+      // Fallback to jsPDF
+      const doc = await this.generateInvoicePDF(invoice, business, isReprint, storeId);
+      return this.getPDFAsBlob(doc);
+    }
+  }
+  
+  /**
+   * Smart PDF generation: uses Puppeteer for Bengali text, jsPDF otherwise
+   */
+  static async generateInvoicePDFSmart(
+    invoice: Invoice,
+    business: BusinessSettings,
+    isReprint: boolean = false,
+    storeId?: string,
+    forcePuppeteer: boolean = false
+  ): Promise<jsPDF | Blob> {
+    // Use Puppeteer if forced or if invoice contains Bengali text
+    if (forcePuppeteer || invoiceContainsBengali(invoice, business)) {
+      return await this.generateInvoicePDFWithPuppeteer(invoice, business, isReprint, storeId);
+    }
+    
+    // Otherwise use jsPDF
+    return await this.generateInvoicePDF(invoice, business, isReprint, storeId);
+  }
+  
+  /**
+   * Generate and save invoice PDF with smart Bengali detection
+   */
+  static async generateAndSaveInvoicePDFSmart(
+    invoice: Invoice,
+    business: BusinessSettings,
+    isReprint: boolean = false,
+    storeId?: string,
+    forcePuppeteer: boolean = false
+  ): Promise<void> {
+    const result = await this.generateInvoicePDFSmart(invoice, business, isReprint, storeId, forcePuppeteer);
+    
+    if (result instanceof jsPDF) {
+      // jsPDF result
+      const fileName = `${invoice.id}_${isReprint ? 'reprint' : 'invoice'}.pdf`;
+      result.save(fileName);
+    } else {
+      // Blob result from Puppeteer
+      const fileName = `${invoice.id}_${isReprint ? 'reprint' : 'invoice'}.pdf`;
+      const url = URL.createObjectURL(result);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+  }
   /**
    * Generate QR code data URL for invoice
    */
@@ -116,6 +318,14 @@ export class PDFService {
       compress: true
     });
 
+    // Try to load Bengali font
+    const hasBengaliFont = await tryAddBengaliFont(doc);
+    
+    // Helper function to set font based on text content
+    const setFont = (text: string, style: 'normal' | 'bold' | 'italic' | 'bolditalic' = 'normal') => {
+      setFontForText(doc, text, hasBengaliFont, style);
+    };
+
     const margin = 10; // Increased from 2 to 10 for better top margin
     const pageWidth = 210;
     let yPos = margin;
@@ -124,6 +334,7 @@ export class PDFService {
     if (isReprint) {
       doc.setFontSize(10);
       doc.setTextColor(150, 150, 150);
+      setFont('REPRINT', 'normal');
       doc.text('REPRINT', pageWidth / 2, yPos, { align: 'center' });
       doc.setTextColor(0, 0, 0);
       yPos += 8; // Increased from 6 to 8
@@ -131,27 +342,30 @@ export class PDFService {
     
     if (business.nameArabic) {
       doc.setFontSize(16);
+      setFont(business.nameArabic, 'normal');
       doc.text(business.nameArabic, pageWidth / 2, yPos, { align: 'center' });
       yPos += 10; // Increased from 8 to 10
     }
     
     doc.setFontSize(20);
-    doc.setFont('helvetica', 'bold');
+    setFont(business.name, 'bold');
     doc.text(business.name, pageWidth / 2, yPos, { align: 'center' });
     yPos += 12; // Increased from 10 to 12
     
     doc.setFontSize(16);
+    setFont(`#${invoice.id}`, 'normal');
     doc.text(`#${invoice.id}`, pageWidth / 2, yPos, { align: 'center' });
     yPos += 8;
     
     if (business.address) {
       doc.setFontSize(10);
-      doc.setFont('helvetica', 'normal');
+      setFont(business.address, 'normal');
       doc.text(business.address, pageWidth / 2, yPos, { align: 'center' });
       yPos += 5;
     }
     
     if (business.phone) {
+      setFont(`Phone: ${business.phone}`, 'normal');
       doc.text(`Phone: ${business.phone}`, pageWidth / 2, yPos, { align: 'center' });
       yPos += 5;
     }
@@ -160,19 +374,23 @@ export class PDFService {
     const invoiceDate = new Date(invoice.date);
     const dateStr = invoiceDate.toLocaleDateString();
     const timeStr = invoiceDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    setFont(`Date: ${dateStr} | Time: ${timeStr}`, 'normal');
     doc.text(`Date: ${dateStr} | Time: ${timeStr}`, pageWidth / 2, yPos, { align: 'center' });
     yPos += 5;
+    setFont(`Customer: ${invoice.customerName}`, 'normal');
     doc.text(`Customer: ${invoice.customerName}`, pageWidth / 2, yPos, { align: 'center' });
     yPos += 5;
     
     // Show who created the bill
     if (invoice.createdBy) {
       const createdByText = `Created by: ${invoice.createdBy.name} (${invoice.createdBy.role.toUpperCase()})`;
+      setFont(createdByText, 'normal');
       doc.text(createdByText, pageWidth / 2, yPos, { align: 'center' });
       yPos += 5;
     }
     
     if (invoice.customerPhone) {
+      setFont(`Phone: ${invoice.customerPhone}`, 'normal');
       doc.text(`Phone: ${invoice.customerPhone}`, pageWidth / 2, yPos, { align: 'center' });
       yPos += 5;
     }
@@ -265,11 +483,12 @@ export class PDFService {
       const isTotal = item.label === 'Grand Total:';
       const fontSize = isTotal ? 11 : 10;
       doc.setFontSize(fontSize);
-      doc.setFont('helvetica', isTotal ? 'bold' : 'normal');
+      setFont(item.label, isTotal ? 'bold' : 'normal');
       
       doc.text(item.label, margin, yPos);
       const displayCurrency = CurrencyService.getDisplayCurrency(business.currency);
       const valueText = `${item.value >= 0 ? '' : '-'}${displayCurrency} ${Math.abs(item.value).toFixed(2)}`;
+      setFont(valueText, isTotal ? 'bold' : 'normal');
       doc.text(valueText, pageWidth - margin, yPos, { align: 'right' });
       
       yPos += 5;
@@ -291,22 +510,23 @@ export class PDFService {
     
     // Footer
     doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
+    setFont('Scan QR for details', 'normal');
     doc.text('Scan QR for details', pageWidth / 2, yPos, { align: 'center' });
     yPos += 6;
     
     doc.setFontSize(12);
-    doc.setFont('helvetica', 'bolditalic');
+    setFont('Thank You!', 'bolditalic');
     doc.text('Thank You!', pageWidth / 2, yPos, { align: 'center' });
     yPos += 8;
     
     doc.setFontSize(8);
-    doc.setFont('helvetica', 'normal');
+    setFont('Software by Labinitial', 'normal');
     doc.text('Software by Labinitial', pageWidth / 2, yPos, { align: 'center' });
     yPos += 5;
     
     if (business.cheerfulNotice) {
       doc.setFontSize(10);
+      setFont(business.cheerfulNotice, 'normal');
       doc.text(business.cheerfulNotice, pageWidth / 2, yPos, { align: 'center' });
       yPos += 5;
     }
@@ -329,13 +549,14 @@ export class PDFService {
           doc.addImage(qrCodeDataUrl, 'PNG', qrX, yPos, qrSize, qrSize);
           yPos += qrSize + 2;
           doc.setFontSize(8);
-          doc.setFont('helvetica', 'normal');
+          setFont('Scan to verify invoice', 'normal');
           doc.text('Scan to verify invoice', pageWidth / 2, yPos, { align: 'center' });
           
           yPos += 4;
           doc.setFontSize(7);
           doc.setTextColor(100, 100, 100);
           const qrUrl = `${PUBLIC_INVOICE_BASE_URL.replace('https://', '')}/invoice/${storeId}/${invoice.id}`;
+          setFont(qrUrl, 'normal');
           doc.text(qrUrl, pageWidth / 2, yPos, { align: 'center' });
           doc.setTextColor(0, 0, 0);
         }
@@ -363,6 +584,14 @@ export class PDFService {
       compress: true
     });
 
+    // Try to load Bengali font
+    const hasBengaliFont = await tryAddBengaliFont(doc);
+    
+    // Helper function to set font based on text content
+    const setFont = (text: string, style: 'normal' | 'bold' | 'italic' | 'bolditalic' = 'normal') => {
+      setFontForText(doc, text, hasBengaliFont, style);
+    };
+
     const margin = 8;
     const pageWidth = 80;
     const pageHeight = 297;
@@ -378,13 +607,14 @@ export class PDFService {
       
       // Add continuation header
       doc.setFontSize(10);
-      doc.setFont('helvetica', 'bold');
+      setFont(`CONTINUED - Page ${currentPage}`, 'bold');
       doc.text(`CONTINUED - Page ${currentPage}`, pageWidth / 2, yPos, { align: 'center' });
       yPos += 6;
       doc.setFontSize(8);
-      doc.setFont('helvetica', 'normal');
+      setFont(`Invoice #${invoice.id}`, 'normal');
       doc.text(`Invoice #${invoice.id}`, pageWidth / 2, yPos, { align: 'center' });
       yPos += 4;
+      setFont(`Customer: ${invoice.customerName}`, 'normal');
       doc.text(`Customer: ${invoice.customerName}`, pageWidth / 2, yPos, { align: 'center' });
       yPos += 4;
       doc.setLineWidth(0.2);
@@ -396,6 +626,7 @@ export class PDFService {
     if (isReprint) {
       doc.setFontSize(10);
       doc.setTextColor(150, 150, 150);
+      setFont('REPRINT', 'normal');
       doc.text('REPRINT', pageWidth / 2, yPos, { align: 'center' });
       doc.setTextColor(0, 0, 0);
       yPos += 6;
@@ -403,27 +634,30 @@ export class PDFService {
     
     if (business.nameArabic) {
       doc.setFontSize(12);
+      setFont(business.nameArabic, 'normal');
       doc.text(business.nameArabic, pageWidth / 2, yPos, { align: 'center' });
       yPos += 6;
     }
     
     doc.setFontSize(16);
-    doc.setFont('helvetica', 'bold');
+    setFont(business.name, 'bold');
     doc.text(business.name, pageWidth / 2, yPos, { align: 'center' });
     yPos += 10;
     
     doc.setFontSize(12);
+    setFont(`#${invoice.id}`, 'normal');
     doc.text(`#${invoice.id}`, pageWidth / 2, yPos, { align: 'center' });
     yPos += 6;
     
     if (business.address) {
       doc.setFontSize(8);
-      doc.setFont('helvetica', 'normal');
+      setFont(business.address, 'normal');
       doc.text(business.address, pageWidth / 2, yPos, { align: 'center' });
       yPos += 4;
     }
     
     if (business.phone) {
+      setFont(`Phone: ${business.phone}`, 'normal');
       doc.text(`Phone: ${business.phone}`, pageWidth / 2, yPos, { align: 'center' });
       yPos += 4;
     }
@@ -432,19 +666,23 @@ export class PDFService {
     const invoiceDate = new Date(invoice.date);
     const dateStr = invoiceDate.toLocaleDateString();
     const timeStr = invoiceDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    setFont(`Date: ${dateStr} | Time: ${timeStr}`, 'normal');
     doc.text(`Date: ${dateStr} | Time: ${timeStr}`, pageWidth / 2, yPos, { align: 'center' });
     yPos += 4;
+    setFont(`Customer: ${invoice.customerName}`, 'normal');
     doc.text(`Customer: ${invoice.customerName}`, pageWidth / 2, yPos, { align: 'center' });
     yPos += 4;
     
     // Show who created the bill
     if (invoice.createdBy) {
       const createdByText = `Created by: ${invoice.createdBy.name} (${invoice.createdBy.role.toUpperCase()})`;
+      setFont(createdByText, 'normal');
       doc.text(createdByText, pageWidth / 2, yPos, { align: 'center' });
       yPos += 4;
     }
     
     if (invoice.customerPhone) {
+      setFont(`Phone: ${invoice.customerPhone}`, 'normal');
       doc.text(`Phone: ${invoice.customerPhone}`, pageWidth / 2, yPos, { align: 'center' });
       yPos += 4;
     }
@@ -456,7 +694,7 @@ export class PDFService {
     
     // Items in simplified format
     doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
+    setFont('ITEMS', 'bold');
     doc.text('ITEMS', margin, yPos);
     yPos += 5;
     
@@ -468,7 +706,7 @@ export class PDFService {
       if (yPos + itemHeight > maxY - 30) { // Leave room for summary section
         addNewPage();
         doc.setFontSize(10);
-        doc.setFont('helvetica', 'bold');
+        setFont('ITEMS (continued)', 'bold');
         doc.text('ITEMS (continued)', margin, yPos);
         yPos += 5;
       }
@@ -485,12 +723,13 @@ export class PDFService {
       }
       
       doc.setFontSize(9);
-      doc.setFont('helvetica', 'normal');
+      setFont(itemName, 'normal');
       doc.text(itemName, margin, yPos);
       
       // Add adjustment reason below item name if available
       if (isPriceAdjusted && adjustmentReason) {
         doc.setFontSize(7);
+        setFont(`(${adjustmentReason})`, 'normal');
         doc.text(`(${adjustmentReason})`, margin, yPos + 3);
         doc.setFontSize(9);
       }
@@ -499,6 +738,7 @@ export class PDFService {
       const displayCurrency = CurrencyService.getDisplayCurrency(business.currency);
       const priceDetails = `${item.quantity} ${item.unit} x ${salePrice.toFixed(2)} = ${displayCurrency} ${(salePrice * item.quantity).toFixed(2)}`;
       
+      setFont(priceDetails, 'normal');
       doc.text(priceDetails, pageWidth - margin, yPos + 4, { align: 'right' });
       
       yPos += (item.adjustmentReason ? 10 : 8);
@@ -540,11 +780,12 @@ export class PDFService {
     summaryItems.forEach((item, index) => {
       const isTotal = item.label === 'Total:';
       doc.setFontSize(10);
-      doc.setFont('helvetica', isTotal ? 'bold' : 'normal');
+      setFont(item.label, isTotal ? 'bold' : 'normal');
       
       doc.text(item.label, margin, yPos);
       const displayCurrency = CurrencyService.getDisplayCurrency(business.currency);
       const valueText = `${item.value >= 0 ? '' : '-'}${displayCurrency} ${Math.abs(item.value).toFixed(2)}`;
+      setFont(valueText, isTotal ? 'bold' : 'normal');
       doc.text(valueText, pageWidth - margin, yPos, { align: 'right' });
       
       yPos += 5;
@@ -560,22 +801,23 @@ export class PDFService {
     
     // Footer
     doc.setFontSize(8);
-    doc.setFont('helvetica', 'normal');
+    setFont('Scan QR for details', 'normal');
     doc.text('Scan QR for details', pageWidth / 2, yPos, { align: 'center' });
     yPos += 6;
     
     doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
+    setFont('Thank You!', 'bold');
     doc.text('Thank You!', pageWidth / 2, yPos, { align: 'center' });
     yPos += 8;
     
     doc.setFontSize(6);
-    doc.setFont('helvetica', 'normal');
+    setFont('Software by Labinitial', 'normal');
     doc.text('Software by Labinitial', pageWidth / 2, yPos, { align: 'center' });
     yPos += 5;
     
     if (business.cheerfulNotice) {
       doc.setFontSize(8);
+      setFont(business.cheerfulNotice, 'normal');
       doc.text(business.cheerfulNotice, pageWidth / 2, yPos, { align: 'center' });
       yPos += 5;
     }
@@ -605,7 +847,7 @@ export class PDFService {
           doc.addImage(qrCodeDataUrl, 'PNG', qrX, yPos, qrSize, qrSize);
           yPos += qrSize + 2;
           doc.setFontSize(6);
-          doc.setFont('helvetica', 'normal');
+          setFont('Scan to verify', 'normal');
           doc.text('Scan to verify', pageWidth / 2, yPos, { align: 'center' });
         }
       } catch (error) {
@@ -1135,8 +1377,8 @@ export class PDFService {
   }
 
   /**
-   * Generate and upload invoice PDF to Firebase Storage
-   * This creates a shareable link for the invoice
+   * Generate and upload invoice PDF to Firebase Storage using Puppeteer
+   * This creates a shareable link for the invoice with perfect Bengali font support
    */
   static async generateAndUploadInvoicePDF(
     invoice: Invoice,
@@ -1145,13 +1387,10 @@ export class PDFService {
     isReprint: boolean = false
   ): Promise<string> {
     try {
-      console.log(`[PDFService] Generating and uploading PDF for invoice ${invoice.id}`);
+      console.log(`[PDFService] Generating and uploading PDF for invoice ${invoice.id} using Puppeteer`);
       
-      // Generate PDF document
-      const doc = await this.generateInvoicePDF(invoice, business, isReprint, storeId);
-      
-      // Convert PDF to blob
-      const pdfBlob = this.getPDFAsBlob(doc);
+      // Generate PDF using Puppeteer (for perfect Bengali font support)
+      const pdfBlob = await this.generateInvoicePDFWithPuppeteer(invoice, business, isReprint, storeId);
       
       // Import dataService dynamically to avoid circular dependencies
       const { dataService } = await import('./firebaseService');
@@ -1168,8 +1407,8 @@ export class PDFService {
   }
 
   /**
-   * Generate, upload PDF and save invoice with PDF URL
-   * This is a complete solution that handles both PDF generation and invoice saving
+   * Generate, upload PDF and save invoice with PDF URL using Puppeteer
+   * This is a complete solution that handles both PDF generation and invoice saving with perfect Bengali font support
    */
   static async generateUploadAndSaveInvoice(
     invoice: Invoice,
@@ -1178,13 +1417,13 @@ export class PDFService {
     isReprint: boolean = false
   ): Promise<Invoice> {
     try {
-      console.log(`[PDFService] Generating, uploading and saving invoice ${invoice.id}`);
+      console.log(`[PDFService] Generating, uploading and saving invoice ${invoice.id} using Puppeteer`);
       
-      // Generate PDF document
-      const doc = await this.generateInvoicePDF(invoice, business, isReprint, storeId);
+      // ALWAYS use Puppeteer for production - force it
+      console.log(`[PDFService] FORCING Puppeteer for invoice ${invoice.id} in production`);
       
-      // Convert PDF to blob
-      const pdfBlob = this.getPDFAsBlob(doc);
+      // Generate PDF using Puppeteer (for perfect Bengali font support)
+      const pdfBlob = await this.generateInvoicePDFWithPuppeteer(invoice, business, isReprint, storeId);
       
       // Import dataService dynamically to avoid circular dependencies
       const { dataService } = await import('./firebaseService');
@@ -1196,7 +1435,20 @@ export class PDFService {
       return savedInvoice;
     } catch (error) {
       console.error(`[PDFService] Error generating, uploading and saving invoice ${invoice.id}:`, error);
-      throw error;
+      
+      // Try fallback to jsPDF as last resort
+      console.log(`[PDFService] Falling back to jsPDF for invoice ${invoice.id}`);
+      try {
+        const { dataService } = await import('./firebaseService');
+        const doc = await this.generateInvoicePDF(invoice, business, isReprint, storeId);
+        const pdfBlob = this.getPDFAsBlob(doc);
+        const savedInvoice = await dataService.saveInvoiceWithPDFAndStockUpdate(storeId, invoice, pdfBlob);
+        console.log(`[PDFService] Invoice ${invoice.id} saved with jsPDF fallback`);
+        return savedInvoice;
+      } catch (fallbackError) {
+        console.error(`[PDFService] jsPDF fallback also failed for invoice ${invoice.id}:`, fallbackError);
+        throw error; // Throw original error
+      }
     }
   }
 }

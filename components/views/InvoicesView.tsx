@@ -12,7 +12,8 @@ import {
   Download,
   FileText,
   FileSpreadsheet,
-  Loader2
+  Loader2,
+  Trash2
 } from 'lucide-react';
 import Button from '../ui/Button';
 import InvoicePreview from './InvoicePreview';
@@ -27,7 +28,13 @@ type SortConfig = {
 
 const ITEMS_PER_PAGE = 25;
 
-const InvoicesView = ({ invoices, t, business, storeId }: { invoices: Invoice[], t: (key: string) => string, business: BusinessSettings, storeId: string }) => {
+const InvoicesView = ({ invoices, t, business, storeId, onDeleteInvoice }: { 
+  invoices: Invoice[], 
+  t: (key: string) => string, 
+  business: BusinessSettings, 
+  storeId: string,
+  onDeleteInvoice?: (invoiceId: string) => Promise<void>
+}) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'date', direction: 'desc' });
   const [currentPage, setCurrentPage] = useState(1);
@@ -194,13 +201,28 @@ const InvoicesView = ({ invoices, t, business, storeId }: { invoices: Invoice[],
                            </span>
                         </td>
                         <td className="p-4 text-right">
-                           <button 
-                             onClick={() => setSelectedInvoice(inv)}
-                             className="p-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors"
-                             title="View Details"
-                           >
-                              <Eye className="w-4 h-4"/>
-                           </button>
+                           <div className="flex justify-end gap-1">
+                             <button 
+                               onClick={() => setSelectedInvoice(inv)}
+                               className="p-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors"
+                               title="View Details"
+                             >
+                                <Eye className="w-4 h-4"/>
+                             </button>
+                             {onDeleteInvoice && (
+                               <button 
+                                 onClick={() => {
+                                   if (confirm('Are you sure you want to delete this invoice? This action cannot be undone.')) {
+                                     onDeleteInvoice(inv.id);
+                                   }
+                                 }}
+                                 className="p-2 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"
+                                 title="Delete Invoice"
+                               >
+                                  <Trash2 className="w-4 h-4"/>
+                               </button>
+                             )}
+                           </div>
                         </td>
                      </tr>
                   ))}

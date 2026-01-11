@@ -30,7 +30,7 @@ import Input from '../ui/Input';
 import { CurrencyService } from '../../services/currencyService';
 
 const ReportsView = ({ invoices, t, business }: { invoices: Invoice[], t: (key: string) => string, business: BusinessSettings }) => {
-  const [reportRange, setReportRange] = useState<'today' | 'week' | 'month' | 'all' | 'custom'>('all');
+  const [reportRange, setReportRange] = useState<'today' | 'week' | 'month' | 'all' | 'custom'>('today');
   const [customRange, setCustomRange] = useState({ start: '', end: '' });
   const [viewMode, setViewMode] = useState<'dashboard' | 'table' | 'ledger' | 'customer_report'>('dashboard');
   const [customerSearch, setCustomerSearch] = useState('');
@@ -39,32 +39,94 @@ const ReportsView = ({ invoices, t, business }: { invoices: Invoice[], t: (key: 
   // Filter based on range
   const filteredInvoices = useMemo(() => {
     const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const startOfToday = today.toISOString().split('T')[0];
     
-    return invoices.filter(inv => {
-      const invoiceDate = new Date(inv.date);
+    // Get today's date in local timezone (YYYY-MM-DD)
+    const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfToday = todayLocal.toISOString().split('T')[0];
+    
+    // Alternative: Use locale date string (en-CA gives YYYY-MM-DD)
+    const todayLocale = now.toLocaleDateString('en-CA');
+    
+    console.log(`[ReportsView] Filtering invoices: total=${invoices.length}, range=${reportRange}`);
+    console.log(`[ReportsView] Current date (local): ${now.toString()}`);
+    console.log(`[ReportsView] Today start (ISO): ${startOfToday}`);
+    console.log(`[ReportsView] Today start (locale): ${todayLocale}`);
+    
+    // Debug: Show all invoices with their dates
+    invoices.forEach((inv, i) => {
+      const invDate = new Date(inv.date);
+      console.log(`[ReportsView] Invoice ${i+1}: id=${inv.id}, date=${inv.date}, parsed local=${invDate.toLocaleDateString()}, parsed ISO=${invDate.toISOString().split('T')[0]}`);
+    });
+    
+    const filtered = invoices.filter(inv => {
+      console.log(`[ReportsView] Checking invoice: id=${inv.id}, date=${inv.date}, customer=${inv.customerName}, total=${inv.grandTotal}`);
       
       if (reportRange === 'today') {
-        return inv.date === startOfToday;
+        // Get invoice date in local timezone
+        const invoiceDate = new Date(inv.date);
+        const invoiceDateLocal = invoiceDate.toISOString().split('T')[0];
+        const invoiceDateLocale = invoiceDate.toLocaleDateString('en-CA');
+        
+        console.log(`[ReportsView] Today filter details:`);
+        console.log(`  - Invoice date string: ${inv.date}`);
+        console.log(`  - Invoice date local (ISO): ${invoiceDateLocal}`);
+        console.log(`  - Invoice date local (locale): ${invoiceDateLocale}`);
+        console.log(`  - Today start (ISO): ${startOfToday}`);
+        console.log(`  - Today start (locale): ${todayLocale}`);
+        
+        // Try multiple comparison methods to handle timezone issues
+        const matches = 
+          inv.date === startOfToday || 
+          inv.date === todayLocale ||
+          invoiceDateLocal === startOfToday ||
+          invoiceDateLocal === todayLocale ||
+          invoiceDateLocale === startOfToday ||
+          invoiceDateLocale === todayLocale;
+        
+        console.log(`[ReportsView] Today filter result: ${matches}`);
+        return matches;
       }
       if (reportRange === 'week') {
-        const weekAgo = new Date(today);
-        weekAgo.setDate(today.getDate() - 7);
+        const weekAgo = new Date(todayLocal);
+        weekAgo.setDate(todayLocal.getDate() - 7);
         const weekAgoStr = weekAgo.toISOString().split('T')[0];
-        return inv.date >= weekAgoStr;
+        const matches = inv.date >= weekAgoStr;
+        console.log(`[ReportsView] Week filter: invoice date ${inv.date} >= ${weekAgoStr} ? ${matches}`);
+        return matches;
       }
       if (reportRange === 'month') {
-        const monthAgo = new Date(today);
-        monthAgo.setMonth(today.getMonth() - 1);
+        const monthAgo = new Date(todayLocal);
+        monthAgo.setMonth(todayLocal.getMonth() - 1);
         const monthAgoStr = monthAgo.toISOString().split('T')[0];
-        return inv.date >= monthAgoStr;
+        const matches = inv.date >= monthAgoStr;
+        console.log(`[ReportsView] Month filter: invoice date ${inv.date} >= ${monthAgoStr} ? ${matches}`);
+        return matches;
       }
       if (reportRange === 'custom' && customRange.start && customRange.end) {
-        return inv.date >= customRange.start && inv.date <= customRange.end;
+        const matches = inv.date >= customRange.start && inv.date <= customRange.end;
+        console.log(`[ReportsView] Custom filter: ${inv.date} between ${customRange.start} and ${customRange.end} ? ${matches}`);
+        return matches;
       }
+      console.log(`[ReportsView] All filter: including invoice`);
       return true;
     });
+    
+    console.log(`[ReportsView] Filtered invoices: ${filtered.length} invoices`);
+    if (filtered.length > 0) {
+      filtered.forEach((inv, i) => {
+        console.log(`[ReportsView] Filtered invoice ${i+1}: ${inv.id} - ${inv.date} - ${inv.customerName} - ${inv.grandTotal}`);
+      });
+    } else {
+      console.log(`[ReportsView] WARNING: No invoices matched the filter!`);
+      console.log(`[ReportsView] Possible issues:`);
+      console.log(`  1. Invoice dates don't match today's date format`);
+      console.log(`  2. Invoices have different date format than YYYY-MM-DD`);
+      console.log(`  3. Timezone issues with date comparison`);
+      console.log(`  4. No invoices exist in the system`);
+      console.log(`[ReportsView] Try switching to "All" filter to see all invoices`);
+    }
+    
+    return filtered;
   }, [invoices, reportRange, customRange]);
 
   // Aggregate product-level profit data
@@ -154,11 +216,18 @@ const ReportsView = ({ invoices, t, business }: { invoices: Invoice[], t: (key: 
       // Handle different payment mode formats (case-insensitive)
       const paymentMode = inv.paymentMode?.toLowerCase() || '';
       if (paymentMode.includes('cash')) {
-        map[date].cash += inv.paidAmount;
+        // Calculate net cash kept (after change given)
+        const changeGiven = inv.dueAmount < 0 ? -inv.dueAmount : 0;
+        const netCash = inv.paidAmount - changeGiven;
+        map[date].cash += netCash;
       } else if (paymentMode.includes('card')) {
+        // For card payments, no change is given
         map[date].card += inv.paidAmount;
       }
-      map[date].due += inv.dueAmount;
+      // Only include positive due amounts in ledger
+      if (inv.dueAmount > 0) {
+        map[date].due += inv.dueAmount;
+      }
     });
     return Object.values(map).sort((a, b) => b.date.localeCompare(a.date));
   }, [filteredInvoices]);
@@ -228,22 +297,50 @@ const ReportsView = ({ invoices, t, business }: { invoices: Invoice[], t: (key: 
   const grossProfit = netSales - totalCost;
   const profitMargin = netSales > 0 ? (grossProfit / netSales) * 100 : 0;
   
-  // Calculate cash/card distribution correctly
+  // Calculate cash/card/pay later distribution correctly
   const totalCash = useMemo(() => {
     return filteredInvoices.reduce((sum, inv) => {
       const paymentMode = inv.paymentMode?.toLowerCase() || '';
-      return paymentMode.includes('cash') ? sum + inv.paidAmount : sum;
+      if (!paymentMode.includes('cash')) return sum;
+      
+      // Calculate net cash kept (after change given)
+      // If dueAmount is negative, that's change given to customer
+      // Net cash = paidAmount - changeGiven
+      // changeGiven = max(0, -dueAmount)
+      const changeGiven = inv.dueAmount < 0 ? -inv.dueAmount : 0;
+      const netCash = inv.paidAmount - changeGiven;
+      
+      return sum + netCash;
     }, 0);
   }, [filteredInvoices]);
   
   const totalCard = useMemo(() => {
     return filteredInvoices.reduce((sum, inv) => {
       const paymentMode = inv.paymentMode?.toLowerCase() || '';
-      return paymentMode.includes('card') ? sum + inv.paidAmount : sum;
+      if (!paymentMode.includes('card')) return sum;
+      
+      // For card payments, no change is given
+      // Net card amount = paidAmount (cards don't get change)
+      return sum + inv.paidAmount;
     }, 0);
   }, [filteredInvoices]);
   
-  const totalDue = filteredInvoices.reduce((sum, inv) => sum + inv.dueAmount, 0);
+  // Pay Later should only include positive due amounts (amounts customers owe)
+  // Negative due amounts represent change given (overpayment)
+  const totalPayLater = useMemo(() => {
+    return filteredInvoices.reduce((sum, inv) => {
+      // Only include positive due amounts (customers owe money)
+      return inv.dueAmount > 0 ? sum + inv.dueAmount : sum;
+    }, 0);
+  }, [filteredInvoices]);
+  
+  // Calculate total payments (cash + card) for percentage calculations
+  const totalPayments = totalCash + totalCard;
+  
+  // Calculate percentages based on net sales (not individual payment amounts)
+  const cashPercentage = netSales > 0 ? (totalCash / netSales) * 100 : 0;
+  const cardPercentage = netSales > 0 ? (totalCard / netSales) * 100 : 0;
+  const payLaterPercentage = netSales > 0 ? (totalPayLater / netSales) * 100 : 0;
 
   return (
     <div className="space-y-6 sm:space-y-8 animate-fade-in pb-12 px-1 sm:px-0">
@@ -337,7 +434,7 @@ const ReportsView = ({ invoices, t, business }: { invoices: Invoice[], t: (key: 
               <div className="space-y-4">
                 <TenderLine label={t('cash')} value={totalCash} total={netSales} currency={business.currency} icon={<Banknote />} color="blue" />
                 <TenderLine label={t('card')} value={totalCard} total={netSales} currency={business.currency} icon={<CreditCard />} color="violet" />
-                <TenderLine label={t('pay_later')} value={totalDue} total={netSales} currency={business.currency} icon={<Clock />} color="rose" />
+                <TenderLine label={t('pay_later')} value={totalPayLater} total={netSales} currency={business.currency} icon={<Clock />} color="rose" />
               </div>
             </div>
           </div>

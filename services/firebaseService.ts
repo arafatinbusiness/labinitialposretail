@@ -388,20 +388,43 @@ export const dataService = {
         }
       }
       
+      // Get current product stock before saving (if product exists)
+      let previousStock = 0;
+      let isExistingProduct = false;
+      try {
+        const productRef = doc(getProductsCollection(storeId), finalProduct.id);
+        const productDoc = await getDoc(productRef);
+        if (productDoc.exists()) {
+          const existingProductData = productDoc.data() as Product;
+          previousStock = existingProductData.stock || 0;
+          isExistingProduct = true;
+        }
+      } catch (error) {
+        console.log('Product does not exist yet or error fetching:', error);
+      }
+      
       // Save the product
       await this.saveProduct(storeId, finalProduct);
       
-      // Create stock history record for initial stock
-      if (finalProduct.stock > 0) {
+      // Create stock history record if stock changed
+      const stockChanged = finalProduct.stock !== previousStock;
+      if (stockChanged) {
+        const stockChange = finalProduct.stock - previousStock;
+        const changeType = isExistingProduct ? (stockChange > 0 ? 'add' : 'remove') : 'initial';
+        const reason = isExistingProduct 
+          ? (stockChange > 0 ? 'Stock added' : 'Stock removed')
+          : 'Initial stock';
+        
         await this.createStockHistory(storeId, {
           productId: finalProduct.id,
           productName: finalProduct.name,
           barcode: finalProduct.barcode,
-          changeType: 'initial',
-          quantity: finalProduct.stock,
-          previousStock: 0,
+          unit: finalProduct.unit, // Include product unit
+          changeType,
+          quantity: Math.abs(stockChange),
+          previousStock,
           newStock: finalProduct.stock,
-          reason: 'Initial stock',
+          reason,
           performedBy: userName,
           performedByRole: userRole,
           timestamp: new Date().toISOString(),
@@ -447,6 +470,7 @@ export const dataService = {
         productId,
         productName: product.name,
         barcode: product.barcode,
+        unit: product.unit, // Include product unit
         changeType,
         quantity: stockChange,
         previousStock,
@@ -512,11 +536,26 @@ export const dataService = {
       if (productId) {
         conditions.push(where('productId', '==', productId));
       }
+      
+      // Fix date filtering: Convert date-only strings to proper ISO timestamps for comparison
       if (startDate) {
-        conditions.push(where('timestamp', '>=', startDate));
+        // If startDate is just a date (YYYY-MM-DD), convert to start of day in ISO format
+        let startDateValue = startDate;
+        if (startDate.length === 10 && startDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+          // Add time component for start of day
+          startDateValue = `${startDate}T00:00:00.000Z`;
+        }
+        conditions.push(where('timestamp', '>=', startDateValue));
       }
+      
       if (endDate) {
-        conditions.push(where('timestamp', '<=', endDate));
+        // If endDate is just a date (YYYY-MM-DD), convert to end of day in ISO format
+        let endDateValue = endDate;
+        if (endDate.length === 10 && endDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+          // Add time component for end of day
+          endDateValue = `${endDate}T23:59:59.999Z`;
+        }
+        conditions.push(where('timestamp', '<=', endDateValue));
       }
       
       if (conditions.length > 0) {
@@ -579,6 +618,25 @@ export const dataService = {
       callback(customers);
     }, (error: FirestoreError) => {
       console.error('Customers subscription error:', error);
+    });
+    
+    return unsubscribe;
+  },
+
+  // Real-time subscription for invoices
+  subscribeToInvoices(storeId: string, callback: (invoices: Invoice[]) => void): () => void {
+    const invoicesCollection = getInvoicesCollection(storeId);
+    
+    const unsubscribe = onSnapshot(invoicesCollection, (snapshot) => {
+      const invoices = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Invoice));
+      
+      // Sort by date descending (newest first)
+      invoices.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      
+      saveToCache(storeId, 'invoices', invoices);
+      callback(invoices);
+    }, (error: FirestoreError) => {
+      console.error('Invoices subscription error:', error);
     });
     
     return unsubscribe;
@@ -666,16 +724,25 @@ export const dataService = {
     saveToCache(storeId, 'invoices', [...updatedCache, invoice]);
   },
 
+  async deleteInvoice(storeId: string, invoiceId: string): Promise<void> {
+    await deleteDoc(doc(getInvoicesCollection(storeId), invoiceId));
+    
+    // Clear cache entirely for invoices to prevent data reappearance
+    localStorage.removeItem(getCacheKey(storeId, 'invoices'));
+    localStorage.removeItem(getCacheTimestampKey(storeId, 'invoices'));
+  },
+
   /**
    * Save invoice and update product stock
    * This ensures stock is automatically deducted when invoices are created
    * Added safety check to prevent duplicate stock deduction
    * Now respects stockManagementEnabled setting
    * OPTIMIZED: Uses batch writes and parallel reads for maximum performance
+   * FIXED: Now creates stock history records for sales
    */
   async saveInvoiceWithStockUpdate(storeId: string, invoice: Invoice): Promise<void> {
     try {
-      console.log(`[firebaseService] OPTIMIZED: Saving invoice ${invoice.id} with stock update`);
+      console.log(`[firebaseService] OPTIMIZED: Saving invoice ${invoice.id} with stock update and history`);
       
       // Check if invoice already exists (to prevent duplicate stock deduction)
       const invoiceRef = doc(getInvoicesCollection(storeId), invoice.id);
@@ -787,6 +854,45 @@ export const dataService = {
         
         console.log(`[firebaseService] Batch committed successfully`);
         
+        // AFTER batch commit, create stock history records for each product sold
+        // This is done separately because stock history doesn't need to be in the same transaction
+        console.log(`[firebaseService] Creating stock history records for ${invoice.items.length} items...`);
+        const historyPromises = invoice.items.map(async (item, i) => {
+          const productDoc = productDocs[i];
+          if (productDoc.exists()) {
+            const product = productDoc.data() as Product;
+            const previousStock = product.stock;
+            const newStock = previousStock - item.quantity;
+            
+            try {
+              await this.createStockHistory(storeId, {
+                productId: item.id,
+                productName: item.name,
+                barcode: item.barcode,
+                unit: product.unit, // Include product unit
+                changeType: 'sale',
+                quantity: -item.quantity, // Negative for sales
+                previousStock,
+                newStock,
+                reason: `Invoice ${invoice.id}`,
+                performedBy: invoice.createdBy?.name || 'System',
+                performedByRole: invoice.createdBy?.role || 'cashier',
+                timestamp: new Date().toISOString(),
+                referenceId: invoice.id,
+                storeId
+              });
+              console.log(`[firebaseService] Stock history created for ${item.name}: ${previousStock} → ${newStock}`);
+            } catch (historyError) {
+              console.error(`[firebaseService] Error creating stock history for ${item.name}:`, historyError);
+              // Don't throw here - stock was already updated, history is secondary
+            }
+          }
+        });
+        
+        // Wait for all history records to be created (but don't fail if some fail)
+        await Promise.allSettled(historyPromises);
+        console.log(`[firebaseService] Stock history records created for invoice ${invoice.id}`);
+        
       } else {
         console.log(`[firebaseService] Stock management disabled, skipping stock validation and updates`);
         
@@ -802,7 +908,7 @@ export const dataService = {
       const updatedInvoiceCache = cachedInvoices.filter(i => i.id !== invoice.id);
       saveToCache(storeId, 'invoices', [...updatedInvoiceCache, invoice]);
       
-      console.log(`[firebaseService] Invoice ${invoice.id} saved successfully ${stockManagementEnabled ? 'with optimized stock updates' : 'without stock updates (stock management disabled)'}`);
+      console.log(`[firebaseService] Invoice ${invoice.id} saved successfully ${stockManagementEnabled ? 'with optimized stock updates and history' : 'without stock updates (stock management disabled)'}`);
     } catch (error) {
       console.error(`[firebaseService] Error saving invoice with stock update:`, error);
       throw error;
@@ -1256,13 +1362,37 @@ export const dataService = {
       'invoices',
       'employees',
       'attendance',
-      'salaries'
+      'salaries',
+      'categories'
     ];
     
     collections.forEach(collectionName => {
       localStorage.removeItem(getCacheKey(storeId, collectionName));
       localStorage.removeItem(getCacheTimestampKey(storeId, collectionName));
     });
+  },
+
+  // Clear all cache for a store (including legacy fallback storage)
+  clearAllCache(storeId: string): void {
+    // Clear Firebase cache
+    this.clearCache(storeId);
+    
+    // Clear legacy fallback storage
+    const legacyKeys = [
+      'products',
+      'customers', 
+      'invoices',
+      'employees',
+      'attendance',
+      'salaries',
+      'business'
+    ];
+    
+    legacyKeys.forEach(key => {
+      localStorage.removeItem(`store_${storeId}_${key}`);
+    });
+    
+    console.log(`[firebaseService] Cleared all cache for store: ${storeId}`);
   },
 
   // Store Users Management

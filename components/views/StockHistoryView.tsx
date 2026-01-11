@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { History, Filter, Download, Search, Calendar, Package, User, FileText } from 'lucide-react';
+import { History, Filter, Download, Search, Calendar, Package, User, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import { StockHistory, Product } from '../../types';
@@ -20,24 +20,69 @@ const StockHistoryView = ({ storeId, t, userRole, business }: {
   const [selectedProduct, setSelectedProduct] = useState<string>('all');
   const [selectedType, setSelectedType] = useState<string>('all');
   const [dateRange, setDateRange] = useState<{ start: string; end: string }>({
-    start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 30 days ago
+    start: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 7 days ago (optimized for performance)
     end: new Date().toISOString().split('T')[0] // Today
   });
   const [searchTerm, setSearchTerm] = useState('');
+  const [showAllRecords, setShowAllRecords] = useState(false); // Toggle for showing all records
+  const [performanceWarning, setPerformanceWarning] = useState<string>('');
   
-  // Load data
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(50);
+  
+  // Load data with server-side filtering
   useEffect(() => {
     const loadData = async () => {
       setIsLoading(true);
+      setPerformanceWarning('');
       try {
+        // Use server-side filtering for better performance
+        // Only fetch records within the date range (or all if showAllRecords is true)
+        const fetchStartDate = showAllRecords ? undefined : dateRange.start;
+        const fetchEndDate = showAllRecords ? undefined : dateRange.end;
+        const fetchProductId = selectedProduct !== 'all' ? selectedProduct : undefined;
+        
         const [historyData, productsData] = await Promise.all([
-          dataService.getStockHistory(storeId),
+          dataService.getStockHistory(storeId, fetchProductId, fetchStartDate, fetchEndDate),
           dataService.getProducts(storeId)
         ]);
         
         setStockHistory(historyData);
-        setFilteredHistory(historyData);
+        
+        // Apply additional client-side filters (type and search)
+        let filtered = [...historyData];
+        
+        // Filter by type (if not 'all')
+        if (selectedType !== 'all') {
+          filtered = filtered.filter(item => item.changeType === selectedType);
+        }
+        
+        // Filter by search term
+        if (searchTerm) {
+          const term = searchTerm.toLowerCase();
+          filtered = filtered.filter(item => 
+            item.productName.toLowerCase().includes(term) ||
+            item.barcode?.toLowerCase().includes(term) ||
+            item.performedBy.toLowerCase().includes(term) ||
+            item.reason?.toLowerCase().includes(term) ||
+            item.referenceId?.toLowerCase().includes(term)
+          );
+        }
+        
+        // Ensure sorting by date descending (newest first)
+        filtered.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        
+        setFilteredHistory(filtered);
         setProducts(productsData);
+        
+        // Performance warnings
+        if (historyData.length > 1000) {
+          setPerformanceWarning(`⚠️ Loaded ${historyData.length} records. Consider using date filters for better performance.`);
+        } else if (historyData.length > 5000) {
+          setPerformanceWarning(`⚠️⚠️ Loaded ${historyData.length} records. Performance may be slow. Use date filters to reduce records.`);
+        }
+        
       } catch (error) {
         console.error('Error loading stock history:', error);
       } finally {
@@ -47,14 +92,18 @@ const StockHistoryView = ({ storeId, t, userRole, business }: {
     
     loadData();
     
-    // Subscribe to real-time updates
-    const unsubscribe = dataService.subscribeToStockHistory(storeId, (newHistory) => {
-      setStockHistory(newHistory);
-      applyFilters(newHistory, selectedProduct, selectedType, dateRange, searchTerm);
-    });
+    // Subscribe to real-time updates with product filter if selected
+    const unsubscribe = dataService.subscribeToStockHistory(
+      storeId, 
+      (newHistory) => {
+        setStockHistory(newHistory);
+        applyFilters(newHistory, selectedProduct, selectedType, dateRange, searchTerm);
+      },
+      selectedProduct !== 'all' ? selectedProduct : undefined
+    );
     
     return () => unsubscribe();
-  }, [storeId]);
+  }, [storeId, selectedProduct, dateRange, showAllRecords]);
   
   // Apply filters
   const applyFilters = (
@@ -76,18 +125,30 @@ const StockHistoryView = ({ storeId, t, userRole, business }: {
       filtered = filtered.filter(item => item.changeType === type);
     }
     
-    // Filter by date range
-    if (dateRange.start) {
+    // Filter by date range - FIXED: Use Date objects for accurate comparison
+    if (dateRange.start || dateRange.end) {
       filtered = filtered.filter(item => {
-        const itemDate = new Date(item.timestamp).toISOString().split('T')[0];
-        return itemDate >= dateRange.start;
-      });
-    }
-    
-    if (dateRange.end) {
-      filtered = filtered.filter(item => {
-        const itemDate = new Date(item.timestamp).toISOString().split('T')[0];
-        return itemDate <= dateRange.end;
+        const itemDate = new Date(item.timestamp);
+        
+        // Check start date
+        if (dateRange.start) {
+          const startDate = new Date(dateRange.start);
+          startDate.setHours(0, 0, 0, 0); // Start of day
+          if (itemDate < startDate) {
+            return false;
+          }
+        }
+        
+        // Check end date
+        if (dateRange.end) {
+          const endDate = new Date(dateRange.end);
+          endDate.setHours(23, 59, 59, 999); // End of day
+          if (itemDate > endDate) {
+            return false;
+          }
+        }
+        
+        return true;
       });
     }
     
@@ -103,11 +164,16 @@ const StockHistoryView = ({ storeId, t, userRole, business }: {
       );
     }
     
+    // Ensure sorting by date descending (newest first)
+    filtered.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    
     setFilteredHistory(filtered);
   };
   
   useEffect(() => {
     applyFilters(stockHistory, selectedProduct, selectedType, dateRange, searchTerm);
+    // Reset to first page when filters change
+    setCurrentPage(1);
   }, [selectedProduct, selectedType, dateRange, searchTerm, stockHistory]);
   
   // Get product name by ID
@@ -137,20 +203,37 @@ const StockHistoryView = ({ storeId, t, userRole, business }: {
         return { color: 'bg-gray-100 text-gray-800', label: type, icon: '📝' };
     }
   };
+
+  // Format date as dd-mm-yyyy
+  const formatDate = (date: Date): string => {
+    const day = date.getDate().toString().padStart(2, '0');
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}-${month}-${year}`;
+  };
+
+  // Format time as HH:MM:SS (24-hour format)
+  const formatTime = (date: Date): string => {
+    const hours = date.getHours().toString().padStart(2, '0');
+    const minutes = date.getMinutes().toString().padStart(2, '0');
+    const seconds = date.getSeconds().toString().padStart(2, '0');
+    return `${hours}:${minutes}:${seconds}`;
+  };
   
   // Export to CSV
   const exportToCSV = () => {
-    const headers = ['Date', 'Time', 'Product', 'Barcode', 'Type', 'Quantity', 'Previous Stock', 'New Stock', 'Reason', 'Performed By', 'Role', 'Reference ID'];
+    const headers = ['Date', 'Time', 'Product', 'Barcode', 'Type', 'Quantity', 'Unit', 'Previous Stock', 'New Stock', 'Reason', 'Performed By', 'Role', 'Reference ID'];
     
     const csvData = filteredHistory.map(item => {
       const date = new Date(item.timestamp);
       return [
-        date.toLocaleDateString(),
-        date.toLocaleTimeString(),
+        formatDate(date),
+        formatTime(date),
         `"${item.productName}"`,
         item.barcode || '',
         getChangeTypeInfo(item.changeType).label,
         item.quantity > 0 ? `+${item.quantity}` : item.quantity.toString(),
+        item.unit || 'pc', // Include unit, default to 'pc'
         item.previousStock,
         item.newStock,
         `"${item.reason || ''}"`,
@@ -199,6 +282,28 @@ const StockHistoryView = ({ storeId, t, userRole, business }: {
   };
   
   const summary = calculateSummary();
+  
+  // Pagination calculations
+  const totalItems = filteredHistory.length;
+  const totalPages = Math.ceil(totalItems / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = Math.min(startIndex + itemsPerPage, totalItems);
+  const currentItems = filteredHistory.slice(startIndex, endIndex);
+  
+  // Handle page change
+  const handlePageChange = (page: number) => {
+    if (page >= 1 && page <= totalPages) {
+      setCurrentPage(page);
+      // Scroll to top when changing pages
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+  
+  // Handle items per page change
+  const handleItemsPerPageChange = (value: number) => {
+    setItemsPerPage(value);
+    setCurrentPage(1); // Reset to first page when changing items per page
+  };
   
   if (isLoading) {
     return (
@@ -398,22 +503,171 @@ const StockHistoryView = ({ storeId, t, userRole, business }: {
             </button>
           )}
         </div>
+        
+        {/* Performance Warning & Show All Toggle */}
+        <div className="mt-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          {performanceWarning && (
+            <div className="flex-1">
+              <div className={`p-3 rounded-lg ${performanceWarning.includes('⚠️⚠️') ? 'bg-red-50 border border-red-200' : 'bg-yellow-50 border border-yellow-200'}`}>
+                <p className={`text-sm ${performanceWarning.includes('⚠️⚠️') ? 'text-red-700' : 'text-yellow-700'}`}>
+                  {performanceWarning}
+                </p>
+              </div>
+            </div>
+          )}
+          
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setShowAllRecords(!showAllRecords);
+                if (!showAllRecords) {
+                  // When showing all records, clear date range
+                  setDateRange({ start: '', end: '' });
+                } else {
+                  // When going back to filtered view, set to last 7 days
+                  setDateRange({
+                    start: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                    end: new Date().toISOString().split('T')[0]
+                  });
+                }
+              }}
+              className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                showAllRecords 
+                  ? 'bg-indigo-600 text-white hover:bg-indigo-700' 
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              {showAllRecords ? 'Show Last 7 Days' : 'Show All Records'}
+            </button>
+            
+            <button
+              onClick={() => {
+                setDateRange({
+                  start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                  end: new Date().toISOString().split('T')[0]
+                });
+                setShowAllRecords(false);
+              }}
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200"
+            >
+              Last 30 Days
+            </button>
+            
+            <button
+              onClick={() => {
+                const today = new Date();
+                const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+                setDateRange({
+                  start: firstDayOfMonth.toISOString().split('T')[0],
+                  end: today.toISOString().split('T')[0]
+                });
+                setShowAllRecords(false);
+              }}
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200"
+            >
+              This Month
+            </button>
+          </div>
+        </div>
       </div>
       
-      {/* Results Count */}
-      <div className="flex justify-between items-center">
-        <p className="text-gray-600">
-          Showing {filteredHistory.length} of {stockHistory.length} records
-          {filteredHistory.length !== stockHistory.length && ' (filtered)'}
-        </p>
-        <div className="text-sm text-gray-500">
-          Last updated: {new Date().toLocaleTimeString()}
+      {/* Results Count & Pagination Controls */}
+      <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-4 rounded-xl shadow-sm">
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-gray-600">
+            Showing {startIndex + 1} to {endIndex} of {totalItems} records
+            {filteredHistory.length !== stockHistory.length && ' (filtered)'}
+          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600">Items per page:</span>
+            <select 
+              value={itemsPerPage}
+              onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}
+              className="border border-gray-300 rounded-lg px-2 py-1 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+            >
+              <option value="20">20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+              <option value="200">200</option>
+            </select>
+          </div>
+        </div>
+        
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => handlePageChange(currentPage - 1)}
+            disabled={currentPage === 1}
+            className={`px-3 py-1 rounded-lg text-sm font-medium ${
+              currentPage === 1 
+                ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            <ChevronLeft className="w-4 h-4 inline" /> Previous
+          </button>
+          
+          <div className="flex items-center gap-1">
+            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+              let pageNum;
+              if (totalPages <= 5) {
+                pageNum = i + 1;
+              } else if (currentPage <= 3) {
+                pageNum = i + 1;
+              } else if (currentPage >= totalPages - 2) {
+                pageNum = totalPages - 4 + i;
+              } else {
+                pageNum = currentPage - 2 + i;
+              }
+              
+              return (
+                <button
+                  key={pageNum}
+                  onClick={() => handlePageChange(pageNum)}
+                  className={`w-8 h-8 rounded-lg text-sm font-medium ${
+                    currentPage === pageNum
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  {pageNum}
+                </button>
+              );
+            })}
+            
+            {totalPages > 5 && currentPage < totalPages - 2 && (
+              <>
+                <span className="text-gray-400">...</span>
+                <button
+                  onClick={() => handlePageChange(totalPages)}
+                  className={`w-8 h-8 rounded-lg text-sm font-medium ${
+                    currentPage === totalPages
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  {totalPages}
+                </button>
+              </>
+            )}
+          </div>
+          
+          <button
+            onClick={() => handlePageChange(currentPage + 1)}
+            disabled={currentPage === totalPages}
+            className={`px-3 py-1 rounded-lg text-sm font-medium ${
+              currentPage === totalPages
+                ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            Next <ChevronRight className="w-4 h-4 inline" />
+          </button>
         </div>
       </div>
       
       {/* History Table */}
       <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-        {filteredHistory.length === 0 ? (
+        {currentItems.length === 0 ? (
           <div className="text-center py-12">
             <History className="w-12 h-12 text-gray-300 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-700 mb-2">No stock history found</h3>
@@ -424,17 +678,23 @@ const StockHistoryView = ({ storeId, t, userRole, business }: {
             <table className="w-full text-left">
               <thead className="bg-gray-50 border-b">
                 <tr>
-                  <th className="p-4 font-medium text-gray-600">Date & Time</th>
+                  <th className="p-4 font-medium text-gray-600">
+                    <div className="flex items-center gap-1">
+                      Date & Time
+                      <span className="text-indigo-600" title="Sorted by date (newest first)">↓</span>
+                    </div>
+                  </th>
                   <th className="p-4 font-medium text-gray-600">Product</th>
                   <th className="p-4 font-medium text-gray-600">Type</th>
                   <th className="p-4 font-medium text-gray-600">Quantity</th>
+                  <th className="p-4 font-medium text-gray-600">Unit</th>
                   <th className="p-4 font-medium text-gray-600">Stock Change</th>
                   <th className="p-4 font-medium text-gray-600">Performed By</th>
                   <th className="p-4 font-medium text-gray-600">Reason</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {filteredHistory.map((item) => {
+                {currentItems.map((item) => {
                   const date = new Date(item.timestamp);
                   const typeInfo = getChangeTypeInfo(item.changeType);
                   const isPositive = item.quantity > 0;
@@ -443,10 +703,10 @@ const StockHistoryView = ({ storeId, t, userRole, business }: {
                     <tr key={item.id} className="hover:bg-gray-50">
                       <td className="p-4">
                         <div className="text-sm font-medium text-gray-900">
-                          {date.toLocaleDateString()}
+                          {formatDate(date)}
                         </div>
                         <div className="text-xs text-gray-500">
-                          {date.toLocaleTimeString()}
+                          {formatTime(date)}
                         </div>
                       </td>
                       <td className="p-4">
@@ -464,6 +724,11 @@ const StockHistoryView = ({ storeId, t, userRole, business }: {
                       <td className="p-4">
                         <span className={`font-bold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
                           {isPositive ? '+' : ''}{item.quantity}
+                        </span>
+                      </td>
+                      <td className="p-4">
+                        <span className="text-sm text-gray-700">
+                          {item.unit || 'pc'} {/* Default to 'pc' if unit is not available */}
                         </span>
                       </td>
                       <td className="p-4">

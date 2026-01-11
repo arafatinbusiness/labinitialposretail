@@ -224,60 +224,16 @@ const StoreApp = ({ storeId, onLogout, storeName, userRole: initialUserRole = 'a
         console.error('[StoreApp] Error loading initial data:', error);
         console.error('[StoreApp] Error details:', error.message, error.code);
         
-        // Fallback to localStorage if Firebase fails
-        console.log(`[StoreApp] Falling back to localStorage for store: ${storeId}`);
-        const getKey = (key: string) => `store_${storeId}_${key}`;
+        // Show error to user instead of falling back to localStorage
+        alert(`Failed to load store data: ${error.message}. Please check your internet connection and try again.`);
         
-        const savedProducts = localStorage.getItem(getKey('products'));
-        if (savedProducts) {
-          console.log(`[StoreApp] Found products in localStorage: ${JSON.parse(savedProducts).length} products`);
-          setProducts(JSON.parse(savedProducts));
-        } else {
-          console.log(`[StoreApp] No products in localStorage, creating empty array`);
-          setProducts(createStoreSpecificProducts(storeId));
-        }
-        
-        const savedCustomers = localStorage.getItem(getKey('customers'));
-        if (savedCustomers) {
-          console.log(`[StoreApp] Found customers in localStorage: ${JSON.parse(savedCustomers).length} customers`);
-          setCustomers(JSON.parse(savedCustomers));
-        } else {
-          console.log(`[StoreApp] No customers in localStorage, creating walk-in customer`);
-          setCustomers(createStoreSpecificCustomers(storeId));
-        }
-        
-        const savedInvoices = localStorage.getItem(getKey('invoices'));
-        if (savedInvoices) {
-          console.log(`[StoreApp] Found invoices in localStorage: ${JSON.parse(savedInvoices).length} invoices`);
-          setInvoices(JSON.parse(savedInvoices));
-        }
-        
-        const savedEmployees = localStorage.getItem(getKey('employees'));
-        if (savedEmployees) {
-          console.log(`[StoreApp] Found employees in localStorage: ${JSON.parse(savedEmployees).length} employees`);
-          setEmployees(JSON.parse(savedEmployees));
-        } else {
-          console.log(`[StoreApp] No employees in localStorage, creating empty array`);
-          setEmployees(createStoreSpecificEmployees(storeId));
-        }
-        
-        const savedAttendance = localStorage.getItem(getKey('attendance'));
-        if (savedAttendance) {
-          console.log(`[StoreApp] Found attendance in localStorage: ${JSON.parse(savedAttendance).length} records`);
-          setAttendance(JSON.parse(savedAttendance));
-        }
-        
-        const savedSalaries = localStorage.getItem(getKey('salaries'));
-        if (savedSalaries) {
-          console.log(`[StoreApp] Found salaries in localStorage: ${JSON.parse(savedSalaries).length} records`);
-          setSalaries(JSON.parse(savedSalaries));
-        }
-        
-        const savedBusiness = localStorage.getItem(getKey('business'));
-        if (savedBusiness) {
-          console.log(`[StoreApp] Found business settings in localStorage`);
-          setBusiness(JSON.parse(savedBusiness));
-        }
+        // Set empty state to prevent UI from showing stale data
+        setProducts(createStoreSpecificProducts(storeId));
+        setCustomers(createStoreSpecificCustomers(storeId));
+        setInvoices([]);
+        setEmployees(createStoreSpecificEmployees(storeId));
+        setAttendance([]);
+        setSalaries([]);
       } finally {
         console.log(`[StoreApp] Setting isLoading to false`);
         setIsLoading(false);
@@ -316,30 +272,31 @@ const StoreApp = ({ storeId, onLogout, storeName, userRole: initialUserRole = 'a
       setCustomers(newCustomers);
     });
 
+    // Set up real-time subscription for invoices
+    console.log(`[StoreApp] Setting up real-time subscription for invoices`);
+    const unsubscribeInvoices = dataService.subscribeToInvoices(storeId, (newInvoices) => {
+      console.log(`[StoreApp] Real-time invoices update: ${newInvoices.length} invoices`);
+      console.log(`[StoreApp] Setting invoices state from subscription with ${newInvoices.length} invoices`);
+      if (newInvoices.length > 0) {
+        console.log(`[StoreApp] First invoice from subscription:`, {
+          id: newInvoices[0].id,
+          date: newInvoices[0].date,
+          customerName: newInvoices[0].customerName,
+          grandTotal: newInvoices[0].grandTotal
+        });
+      }
+      setInvoices(newInvoices);
+    });
+
     // Cleanup subscriptions on unmount
     return () => {
       console.log(`[StoreApp] Cleaning up subscriptions`);
       unsubscribeProducts();
       unsubscribeCustomers();
+      unsubscribeInvoices();
     };
   }, [storeId, userRole]);
 
-  // Helper functions to save data to Firebase
-  const saveAllProducts = async (productsToSave: Product[]) => {
-    try {
-      console.log(`Saving ${productsToSave.length} products to Firebase...`);
-      for (const product of productsToSave) {
-        console.log(`Saving product: ${product.id} - ${product.name}`);
-        await dataService.saveProduct(storeId, product);
-        console.log(`Product ${product.id} saved successfully`);
-      }
-      console.log('All products saved to Firebase');
-    } catch (error) {
-      console.error('Error saving products:', error);
-      // Show error to user (in production, you'd use a toast notification)
-      alert(`Error saving products to cloud: ${error.message}. Please check your internet connection.`);
-    }
-  };
 
   const saveAllCustomers = async (customersToSave: Customer[]) => {
     try {
@@ -393,15 +350,26 @@ const StoreApp = ({ storeId, onLogout, storeName, userRole: initialUserRole = 'a
     }
   };
 
-  // Save data to Firebase when it changes (debounced to avoid too many writes)
-  useEffect(() => {
-    if (!isLoading) {
-      const timeoutId = setTimeout(() => {
-        saveAllProducts(products);
-      }, 1000);
-      return () => clearTimeout(timeoutId);
+  // Delete invoice
+  const handleDeleteInvoice = async (invoiceId: string) => {
+    if (!confirm('Are you sure you want to delete this invoice? This action cannot be undone.')) {
+      return;
     }
-  }, [products, storeId, isLoading]);
+    
+    try {
+      await dataService.deleteInvoice(storeId, invoiceId);
+      // Update local state
+      setInvoices(prev => prev.filter(inv => inv.id !== invoiceId));
+      alert('Invoice deleted successfully!');
+    } catch (error) {
+      console.error('Error deleting invoice:', error);
+      alert(`Error deleting invoice: ${error.message}`);
+    }
+  };
+
+  // Note: Products are saved individually in ProductsView when created/edited
+  // and via saveInvoiceWithStockUpdate in POSView when sold
+  // We don't need to save all products here as it causes unnecessary writes and logs
 
   useEffect(() => {
     if (!isLoading) {
@@ -458,6 +426,22 @@ const StoreApp = ({ storeId, onLogout, storeName, userRole: initialUserRole = 'a
   }, [business, storeId, isLoading]);
 
   const t = (key: string) => TRANSLATIONS[key]?.[lang] || key;
+
+  // Online/offline detection
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   const SidebarContent = () => {
     const availableMenus = (Object.keys(IconMap) as Array<keyof typeof IconMap>).filter(key => {
@@ -588,6 +572,12 @@ const StoreApp = ({ storeId, onLogout, storeName, userRole: initialUserRole = 'a
             <h2 className="text-lg lg:text-xl font-bold text-gray-800 capitalize">{t(activeTab)}</h2>
           </div>
           <div className="flex items-center gap-3 lg:gap-4">
+            {/* Online/Offline Status Indicator */}
+            <div className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${isOnline ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+              <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-red-500'}`}></div>
+              <span>{isOnline ? 'Online' : 'Offline'}</span>
+            </div>
+            
             {/* Save Button for Settings Tab */}
             {activeTab === 'settings' && (
               <button 
@@ -696,6 +686,7 @@ const StoreApp = ({ storeId, onLogout, storeName, userRole: initialUserRole = 'a
               t={t} 
               business={business}
               storeId={storeId}
+              onDeleteInvoice={handleDeleteInvoice}
             />
           )}
           {activeTab === 'reports' && userRole === 'admin' && (
@@ -707,6 +698,7 @@ const StoreApp = ({ storeId, onLogout, storeName, userRole: initialUserRole = 'a
                setBusiness={setBusiness} 
                t={t} 
                userRole={userRole}
+               storeId={storeId}
                onSave={() => {
                  // Immediately save settings to Firebase
                  dataService.saveBusinessSettings(storeId, business).catch(error => {

@@ -30,6 +30,11 @@ const ProductsView = ({ storeId, t, userRole, business, userName }: {
   const [importError, setImportError] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   
+  // Search and Filter state
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [sortBy, setSortBy] = useState<string>('name-asc'); // name-asc, name-desc, date-newest, date-oldest, price-high, price-low, stock-high, stock-low
+  
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(200);
@@ -73,12 +78,63 @@ const ProductsView = ({ storeId, t, userRole, business, userName }: {
     };
   }, [storeId]);
 
-  // Pagination calculations
-  const totalItems = products.length;
+  // Filter and sort products
+  const filteredAndSortedProducts = React.useMemo(() => {
+    let filtered = [...products];
+    
+    // Apply search filter
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase().trim();
+      filtered = filtered.filter(product => 
+        product.name.toLowerCase().includes(term) ||
+        (product.barcode && product.barcode.toLowerCase().includes(term)) ||
+        getCategoryName(product.category).toLowerCase().includes(term)
+      );
+    }
+    
+    // Apply category filter
+    if (selectedCategory !== 'all') {
+      filtered = filtered.filter(product => product.category === selectedCategory);
+    }
+    
+    // Apply sorting
+    filtered.sort((a, b) => {
+      switch (sortBy) {
+        case 'name-asc':
+          return a.name.localeCompare(b.name);
+        case 'name-desc':
+          return b.name.localeCompare(a.name);
+        case 'date-newest':
+          // Extract timestamp from product ID (product_1767674961010_156)
+          const timestampA = parseInt(a.id.split('_')[1] || '0');
+          const timestampB = parseInt(b.id.split('_')[1] || '0');
+          return timestampB - timestampA;
+        case 'date-oldest':
+          const timestampA2 = parseInt(a.id.split('_')[1] || '0');
+          const timestampB2 = parseInt(b.id.split('_')[1] || '0');
+          return timestampA2 - timestampB2;
+        case 'price-high':
+          return b.price - a.price;
+        case 'price-low':
+          return a.price - b.price;
+        case 'stock-high':
+          return b.stock - a.stock;
+        case 'stock-low':
+          return a.stock - b.stock;
+        default:
+          return a.name.localeCompare(b.name);
+      }
+    });
+    
+    return filtered;
+  }, [products, searchTerm, selectedCategory, sortBy, categories]);
+  
+  // Pagination calculations based on filtered products
+  const totalItems = filteredAndSortedProducts.length;
   const totalPages = Math.ceil(totalItems / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
   const endIndex = Math.min(startIndex + itemsPerPage, totalItems);
-  const currentProducts = products.slice(startIndex, endIndex);
+  const currentProducts = filteredAndSortedProducts.slice(startIndex, endIndex);
   
   // Bulk selection helpers
   const toggleProductSelection = (productId: string) => {
@@ -540,6 +596,145 @@ const ProductsView = ({ storeId, t, userRole, business, userName }: {
          </div>
        </div>
 
+       {/* Search and Filter Bar */}
+       <div className="bg-white rounded-xl shadow-sm p-4 border border-gray-200">
+         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+           {/* Search Input */}
+           <div>
+             <label className="block text-sm font-medium text-gray-700 mb-1">Search Products</label>
+             <div className="relative">
+               <svg className="absolute left-3 top-2.5 text-gray-400 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+               </svg>
+               <input
+                 type="text"
+                 value={searchTerm}
+                 onChange={(e) => {
+                   setSearchTerm(e.target.value);
+                   setCurrentPage(1); // Reset to first page when searching
+                 }}
+                 placeholder="Search by name, barcode, or category..."
+                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+               />
+             </div>
+           </div>
+           
+           {/* Category Filter */}
+           <div>
+             <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+             <select
+               value={selectedCategory}
+               onChange={(e) => {
+                 setSelectedCategory(e.target.value);
+                 setCurrentPage(1); // Reset to first page when filtering
+               }}
+               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+             >
+               <option value="all">All Categories</option>
+               {categories.map(category => (
+                 <option key={category.id} value={category.id}>
+                   {category.name}
+                 </option>
+               ))}
+             </select>
+           </div>
+           
+           {/* Sort By */}
+           <div>
+             <label className="block text-sm font-medium text-gray-700 mb-1">Sort By</label>
+             <select
+               value={sortBy}
+               onChange={(e) => {
+                 setSortBy(e.target.value);
+                 setCurrentPage(1); // Reset to first page when sorting
+               }}
+               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+             >
+               <option value="name-asc">Name (A → Z)</option>
+               <option value="name-desc">Name (Z → A)</option>
+               <option value="date-newest">Date (Newest First)</option>
+               <option value="date-oldest">Date (Oldest First)</option>
+               <option value="price-high">Price (High → Low)</option>
+               <option value="price-low">Price (Low → High)</option>
+               {business.stockManagementEnabled !== false && (
+                 <>
+                   <option value="stock-high">Stock (High → Low)</option>
+                   <option value="stock-low">Stock (Low → High)</option>
+                 </>
+               )}
+             </select>
+           </div>
+           
+           {/* Results Count & Clear Filters */}
+           <div className="flex flex-col justify-end">
+             <div className="text-sm text-gray-600 mb-2">
+               {filteredAndSortedProducts.length} of {products.length} products
+               {(searchTerm || selectedCategory !== 'all') && ' (filtered)'}
+             </div>
+             {(searchTerm || selectedCategory !== 'all' || sortBy !== 'name-asc') && (
+               <button
+                 onClick={() => {
+                   setSearchTerm('');
+                   setSelectedCategory('all');
+                   setSortBy('name-asc');
+                   setCurrentPage(1);
+                 }}
+                 className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+               >
+                 Clear all filters
+               </button>
+             )}
+           </div>
+         </div>
+         
+         {/* Active Filters Badges */}
+         {(searchTerm || selectedCategory !== 'all') && (
+           <div className="mt-4 flex flex-wrap gap-2">
+             {searchTerm && (
+               <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                 Search: "{searchTerm}"
+                 <button 
+                   onClick={() => setSearchTerm('')}
+                   className="ml-2 text-indigo-600 hover:text-indigo-800"
+                 >
+                   ×
+                 </button>
+               </span>
+             )}
+             {selectedCategory !== 'all' && (
+               <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                 Category: {getCategoryName(selectedCategory)}
+                 <button 
+                   onClick={() => setSelectedCategory('all')}
+                   className="ml-2 text-indigo-600 hover:text-indigo-800"
+                 >
+                   ×
+                 </button>
+               </span>
+             )}
+             {sortBy !== 'name-asc' && (
+               <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                 Sorted: {
+                   sortBy === 'name-desc' ? 'Name (Z → A)' :
+                   sortBy === 'date-newest' ? 'Date (Newest)' :
+                   sortBy === 'date-oldest' ? 'Date (Oldest)' :
+                   sortBy === 'price-high' ? 'Price (High → Low)' :
+                   sortBy === 'price-low' ? 'Price (Low → High)' :
+                   sortBy === 'stock-high' ? 'Stock (High → Low)' :
+                   sortBy === 'stock-low' ? 'Stock (Low → High)' : 'Name (A → Z)'
+                 }
+                 <button 
+                   onClick={() => setSortBy('name-asc')}
+                   className="ml-2 text-indigo-600 hover:text-indigo-800"
+                 >
+                   ×
+                 </button>
+               </span>
+             )}
+           </div>
+         )}
+       </div>
+
        {/* Bulk Actions Bar - Only show when products are selected */}
        {selectedProducts.size > 0 && (userRole === 'admin' || userRole === 'manager') && (
          <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 flex items-center justify-between animate-slide-in">
@@ -693,7 +888,7 @@ const ProductsView = ({ storeId, t, userRole, business, userName }: {
                      <th className="p-4 font-medium text-gray-600">{t('name')}</th>
                      <th className="p-4 font-medium text-gray-600">{t('category')}</th>
                      <th className="p-4 font-medium text-gray-600">{t('price')}</th>
-                     <th className="p-4 font-medium text-gray-600">{t('stock')}</th>
+                     {business.stockManagementEnabled !== false && <th className="p-4 font-medium text-gray-600">{t('stock')}</th>}
                      {(userRole === 'admin' || userRole === 'manager') && <th className="p-4 font-medium text-gray-600 text-right">Actions</th>}
                   </tr>
                </thead>
@@ -736,7 +931,7 @@ const ProductsView = ({ storeId, t, userRole, business, userName }: {
                           </span>
                         </td>
                         <td className="p-4 font-bold">{CurrencyService.formatAmountWithSpace(p.price, business.currency)}</td>
-                        <td className="p-4">{p.stock} {p.unit}</td>
+                        {business.stockManagementEnabled !== false && <td className="p-4">{p.stock} {p.unit}</td>}
                         {(userRole === 'admin' || userRole === 'manager') && (
                           <td className="p-4 text-right">
                              <button onClick={() => openEdit(p)} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded mr-2"><Edit className="w-4 h-4"/></button>
@@ -800,7 +995,9 @@ const ProductsView = ({ storeId, t, userRole, business, userName }: {
                   >
                     {getCategoryName(p.category)}
                   </span>
-                  <span className="text-sm text-gray-600">{p.stock} {p.unit}</span>
+                  {business.stockManagementEnabled !== false && (
+                    <span className="text-sm text-gray-600">{p.stock} {p.unit}</span>
+                  )}
                 </div>
                 {(userRole === 'admin' || userRole === 'manager') && (
                   <div className="flex gap-2 pt-3 border-t border-gray-100">
@@ -843,8 +1040,8 @@ const ProductsView = ({ storeId, t, userRole, business, userName }: {
        )}
 
        {isModalOpen && (
-         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
+         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 overflow-y-auto">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-2xl shadow-2xl my-8">
                <h3 className="text-xl font-bold mb-4">{editingProduct ? 'Edit Product' : 'Add Product'}</h3>
                <form onSubmit={handleSubmit} className="space-y-3">
                   <Input label="Name" value={formData.name || ''} onChange={e => setFormData({...formData, name: e.target.value})} required />
@@ -937,16 +1134,21 @@ const ProductsView = ({ storeId, t, userRole, business, userName }: {
                      <div></div> {/* placeholder for alignment */}
                   </div>
                   <div className="grid grid-cols-2 gap-3">
-                     <div className="space-y-1">
-                       <Input 
-                         label="Stock" 
-                         type="number" 
-                         value={formData.stock || ''} 
-                         onChange={e => setFormData({...formData, stock: Number(e.target.value)})} 
-                         required 
-                       />
-                     </div>
-                     <div className="space-y-1">
+                     {business.stockManagementEnabled !== false ? (
+                       <div className="space-y-1">
+                         <Input 
+                           label="Stock" 
+                           type="number" 
+                           value={formData.stock || ''} 
+                           onChange={e => setFormData({...formData, stock: Number(e.target.value)})} 
+                           required
+                         />
+                         <p className="text-xs text-gray-500">
+                           Current stock quantity
+                         </p>
+                       </div>
+                     ) : null}
+                     <div className={`space-y-1 ${business.stockManagementEnabled !== false ? '' : 'col-span-2'}`}>
                        <Input 
                          label="Unit" 
                          value={formData.unit || ''} 
@@ -1083,8 +1285,8 @@ const ProductsView = ({ storeId, t, userRole, business, userName }: {
 
        {/* Import Products Modal */}
        {showImportModal && (
-         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
+         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 overflow-y-auto">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-2xl shadow-2xl my-8">
                <h3 className="text-xl font-bold mb-4">Import Products from CSV</h3>
                
                <div className="space-y-4">
