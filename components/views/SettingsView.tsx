@@ -4,11 +4,12 @@ import Button from '../ui/Button';
 import Input from '../ui/Input';
 import { BusinessSettings, UserRole } from '../../types';
 
-const SettingsView = ({ business, setBusiness, t, userRole, onSave }: { 
+const SettingsView = ({ business, setBusiness, t, userRole, storeId, onSave }: { 
   business: BusinessSettings, 
   setBusiness: React.Dispatch<React.SetStateAction<BusinessSettings>>, 
   t: (key: string) => string,
   userRole: UserRole,
+  storeId: string,
   onSave?: () => void
 }) => {
   // All roles can access settings (admin, cashier, salesman, manager)
@@ -456,6 +457,66 @@ const SettingsView = ({ business, setBusiness, t, userRole, onSave }: {
            </div>
          </div>
        )}
+
+       {/* Cache Management Section */}
+       <div className="bg-white p-6 rounded-xl shadow-sm space-y-4 mt-6">
+         <div className="flex items-center gap-3 mb-4">
+           <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center">
+             <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+             </svg>
+           </div>
+           <h3 className="text-xl font-bold text-gray-800">Cache Management</h3>
+         </div>
+         
+         <div className="space-y-4">
+           <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+             <h4 className="font-medium text-amber-800 mb-2">Clear Local Cache</h4>
+             <p className="text-sm text-amber-700">
+               Clear all locally cached data. This will force the app to reload fresh data from Firebase.
+               Use this if you're experiencing data synchronization issues or seeing old data that should have been deleted.
+             </p>
+             <ul className="list-disc pl-5 mt-2 text-xs text-amber-700 space-y-1">
+               <li>Clears 5-minute cache for products, customers, invoices, etc.</li>
+               <li>Removes legacy localStorage fallback data</li>
+               <li>Does not delete any data from Firebase</li>
+               <li>App will reload data on next operation</li>
+             </ul>
+           </div>
+           
+           <div className="flex gap-3">
+             <Button 
+               variant="secondary" 
+               onClick={async () => {
+                 if (confirm('Are you sure you want to clear all local cache? This will force the app to reload fresh data from Firebase.')) {
+                   try {
+                     const { dataService } = await import('../../services/firebaseService');
+                     dataService.clearAllCache(storeId);
+                     alert('Local cache cleared successfully! The app will reload fresh data on next operation.');
+                   } catch (error: any) {
+                     console.error('Error clearing cache:', error);
+                     alert(`Error clearing cache: ${error.message}`);
+                   }
+                 }
+               }}
+               className="flex-1"
+             >
+               Clear Cache
+             </Button>
+           </div>
+           
+           <div className="text-sm text-gray-600 mt-4">
+             <p className="font-medium">When to clear cache:</p>
+             <ul className="list-disc pl-5 mt-1 space-y-1">
+               <li>Data appears that was deleted from Firebase</li>
+               <li>Reports show incorrect or old information</li>
+               <li>Products/customers not updating properly</li>
+               <li>After fixing data issues in Firebase</li>
+             </ul>
+           </div>
+         </div>
+       </div>
+
     </div>
   );
 };

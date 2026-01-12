@@ -223,13 +223,13 @@ export default function App() {
         try {
           const result = await authService.signIn(email, password);
           
-          // Check email verification
-          if (!authService.isEmailVerified()) {
-            setNeedsEmailVerification(true);
-            setAuthError('Please verify your email before logging in. Check your inbox for verification link.');
-            setIsLoading(false);
-            return;
-          }
+              // Check email verification
+              if (!authService.isEmailVerified()) {
+                setNeedsEmailVerification(true);
+                setAuthError('Please verify your email before logging in. Check your inbox (including spam folder) for verification link.');
+                setIsLoading(false);
+                return;
+              }
           
           // Handle store owner login
           if (result.store) {
@@ -328,7 +328,7 @@ export default function App() {
             // Check email verification
             if (!authService.isEmailVerified()) {
               setNeedsEmailVerification(true);
-              setAuthError('Please verify your email before logging in. Check your inbox for verification link.');
+              setAuthError('Please verify your email before logging in. Check your inbox (including spam folder) for verification link.');
               setIsLoading(false);
               return;
             }
@@ -381,7 +381,7 @@ export default function App() {
                 
                 // Show email verification required message for staff
                 setNeedsEmailVerification(true);
-                setAuthError('Account created successfully! Please check your email for verification link. You must verify your email before accessing the dashboard.');
+                setAuthError('Account created successfully! Please check your email (including spam folder) for verification link. You must verify your email before accessing the dashboard.');
                 setIsLoading(false);
                 return;
                 
@@ -428,7 +428,7 @@ export default function App() {
               
               // Show email verification required message
               setNeedsEmailVerification(true);
-              setAuthError('Account created successfully! Please check your email for verification link. You must verify your email before accessing the dashboard.');
+              setAuthError('Account created successfully! Please check your email (including spam folder) for verification link. You must verify your email before accessing the dashboard.');
               setIsLoading(false);
               return;
               
@@ -935,8 +935,23 @@ export default function App() {
                   <ShieldAlert className="w-8 h-8" />
                 </div>
                 <h3 className="text-xl font-bold mb-2">Email Verification Required</h3>
+                <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 mb-6 text-left">
+                  <div className="flex items-start gap-3">
+                    <div className="w-6 h-6 bg-yellow-100 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <svg className="w-4 h-4 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-yellow-800 font-medium mb-1">Important: Check your spam folder</p>
+                      <p className="text-yellow-700 text-sm">
+                        Verification emails sometimes go to spam/junk folders. Please check there if you don't see it in your inbox.
+                      </p>
+                    </div>
+                  </div>
+                </div>
                 <p className="text-gray-600 mb-6">
-                  Please verify your email address before logging in. Check your inbox for the verification link sent by Firebase.
+                  We've sent a verification link to your email address. Click the link in the email to verify your account and continue.
                 </p>
                 <div className="space-y-3">
                   <Button 
@@ -946,14 +961,14 @@ export default function App() {
                     }}
                     className="w-full"
                   >
-                    OK
+                    OK, I'll check my email
                   </Button>
                   <Button 
                     variant="secondary"
                     onClick={async () => {
                       try {
                         await authService.sendEmailVerification();
-                        setAuthError('Verification email resent. Please check your inbox (including spam folder).');
+                        setAuthError('Verification email resent! Please check your inbox AND spam folder.');
                         setNeedsEmailVerification(false);
                       } catch (error: any) {
                         addDebugLog(`Error resending verification email: ${error.message}`);
@@ -964,6 +979,25 @@ export default function App() {
                   >
                     Resend Verification Email
                   </Button>
+                </div>
+                <div className="mt-6 pt-4 border-t border-gray-100">
+                  <p className="text-sm text-gray-500">
+                    Still not receiving the email? Try:
+                  </p>
+                  <ul className="text-sm text-gray-500 mt-2 space-y-1">
+                    <li className="flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div>
+                      Wait a few minutes
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div>
+                      Check spam/junk folders
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div>
+                      Ensure email address is correct
+                    </li>
+                  </ul>
                 </div>
               </div>
             </div>

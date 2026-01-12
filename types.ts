@@ -167,6 +167,7 @@ export interface StockHistory {
   productId: string;
   productName: string;
   barcode?: string; // Link to product barcode for easy lookup
+  unit?: string; // Product unit (kg, pc, etc.)
   changeType: 'add' | 'remove' | 'adjust' | 'initial' | 'sale' | 'return' | 'damage';
   quantity: number; // Positive for add, negative for remove/sale
   previousStock: number;
